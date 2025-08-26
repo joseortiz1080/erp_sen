@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <h2>Dashboard Principal</h2>
+  <p>Bienvenido al panel de control del sistema ERP SEN.</p>
+
+  <div class="row mt-4">
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">Estudiantes</h5>
+          <p class="card-text">Accede al listado de estudiantes y sus datos financieros.</p>
+          <a href="{% url 'listar_estudiantes' %}" class="btn btn-primary btn-sm">Ver estudiantes</a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">Pruebas</h5>
+          <p class="card-text">Consulta resultados de pruebas o inicia una nueva.</p>
+          <a href="{% url 'registro_interesado' %}" class="btn btn-success btn-sm">Ir a pruebas</a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">Salir</h5>
+          <p class="card-text">Finaliza la sesión actual del sistema.</p>
+          <a href="{% url 'logout' %}" class="btn btn-outline-danger btn-sm">Cerrar sesión</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

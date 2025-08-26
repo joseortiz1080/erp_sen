@@ -5,6 +5,7 @@ from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.decorators import login_required
 
+
 @login_required
 def vista_inicial(request):
     return render(request, 'inicio.html')
@@ -20,3 +21,7 @@ def login_view(request):
         else:
             return render(request, 'login.html', {'error': True})
     return render(request, 'login.html')
+
+@login_required
+def dashboard_view(request):
+    return render(request, 'dashboard.html')
