@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+
+{% block title %}Listado de Estudiantes{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Listado de Estudiantes</h2>
+
+<table class="table table-striped table-hover table-bordered align-middle">
+  <thead class="table-dark">
+    <tr>
+      <th>ID</th>
+      <th>Nombre completo</th>
+      <th>Fecha nacimiento</th>
+      <th>Nivel</th>
+      <th>Acudiente</th>
+      <th>Sede</th>
+      <th>Estado</th>
+      <th>Observación</th>
+      <th>Valor paquete</th>
+      <th>Horario</th>
+      <th>Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for estudiante in estudiantes %}
+    <tr>
+      <td>{{ estudiante.id }}</td>
+      <td>{{ estudiante.nombre_completo }}</td>
+      <td>{{ estudiante.fecha_nacimiento }}</td>
+      <td>{{ estudiante.nivel.nombre }}</td>
+      <td>{{ estudiante.acudiente }}</td>
+      <td>{{ estudiante.sede }}</td>
+      <td>{{ estudiante.estado }}</td>
+      <td>{{ estudiante.observacion|default:"—" }}</td>
+      <td>${{ estudiante.valor_paquete_total|floatformat:0|default:"—" }}</td>
+      <td>{{ estudiante.horario|default:"—" }}</td>
+      <td class="text-center">
+        <a href="{% url 'detalle_estudiante' estudiante.id %}" class="btn btn-sm btn-outline-primary" title="Ver detalle">
+            <i class="bi bi-search"></i> <!-- Bootstrap Icon: lupa -->
+        </a>
+      </td>
+
+    </tr>
+    {% empty %}
+    <tr>
+      <td colspan="10" class="text-center">No hay estudiantes registrados.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,381 @@
+{% extends 'base.html' %}
+{% load filtros_monetarios %}
+{% load static %}
+
+{% block title %}Cuentas por Cobrar (por cuota){% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Cuentas por Cobrar (todas las cuotas)</h2>
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-md-3">
+    <label class="form-label">Buscar</label>
+    <input type="text" name="q" value="{{ q }}" class="form-control"
+           placeholder="Estudiante, acudiente, contrato, factura, referencia">
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Estado cuota</label>
+    <select name="estado" class="form-select">
+      <option value="">(Todos)</option>
+      {% for e in ESTADOS %}
+        <option value="{{ e }}" {% if estado == e %}selected{% endif %}>{{ e }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Nivel</label>
+    <select name="nivel" class="form-select">
+      <option value="">(Todos)</option>
+      {% for n in niveles %}
+        <option value="{{ n.id }}" {% if nivel_id|default:'' == n.id|stringformat:'s' %}selected{% endif %}>{{ n.nombre }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Horario</label>
+    <select name="horario" class="form-select">
+      <option value="">(Todos)</option>
+      {% for h in horarios %}
+        <option value="{{ h.id }}" {% if horario_id|default:'' == h.id|stringformat:'s' %}selected{% endif %}>{{ h.descripcion }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-3">
+    <label class="form-label">Vencimiento (desde / hasta)</label>
+    <div class="d-flex gap-2">
+      <input type="date" name="fv_desde" value="{{ fv_desde }}" class="form-control">
+      <input type="date" name="fv_hasta" value="{{ fv_hasta }}" class="form-control">
+    </div>
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Medio de pago</label>
+    <select name="medio" class="form-select">
+      <option value="">(Todos)</option>
+      {% for m in MEDIOS %}
+        <option value="{{ m }}" {% if medio == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Factura</label>
+    <input type="text" name="factura" value="{{ factura }}" class="form-control" placeholder="N° factura">
+  </div>
+
+  <!-- NUEVO: filtro por Referencia -->
+  <div class="col-md-2">
+    <label class="form-label">Referencia</label>
+    <input type="text" name="referencia" value="{{ referencia }}" class="form-control" placeholder="Ref. de pago">
+  </div>
+
+  <div class="col-md-2">
+    <label class="form-label">Con pagos</label>
+    <select name="con_pago" class="form-select">
+      <option value="">(Todos)</option>
+      <option value="si" {% if con_pago == 'si' %}selected{% endif %}>Sí</option>
+      <option value="no" {% if con_pago == 'no' %}selected{% endif %}>No</option>
+    </select>
+  </div>
+
+  {% if sedes %}
+  <div class="col-md-2">
+    <label class="form-label">Sede</label>
+    <select name="sede" class="form-select">
+      <option value="">(Todas)</option>
+      {% for s in sedes %}
+        <option value="{{ s.id }}" {% if sede_id|default:'' == s.id|stringformat:'s' %}selected{% endif %}>{{ s.nombre }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
+  <div class="col-md-1">
+    <label class="form-label">Por página</label>
+    <input type="number" name="per_page" value="{{ per_page }}" min="10" max="200" class="form-control">
+  </div>
+
+  <div class="col-md-3 d-flex align-items-end gap-2">
+    <button class="btn btn-primary" type="submit">Filtrar</button>
+    <a class="btn btn-outline-secondary" href="{% url 'listado_cxc' %}">Limpiar</a>
+  </div>
+</form>
+
+<table class="table table-sm table-bordered align-middle">
+  <thead class="table-light">
+  <tr>
+    <th>ID Est.</th>
+    <th>Estudiante</th>
+    <th>Nombre Acudiente</th>
+    <th>Nivel</th>
+    <th>Horario</th>
+    <th>Factura</th>
+    <th>Cuota #</th>
+    <th>Valor Cuota</th>
+    <th>Estado</th>
+    <th>Vence</th>
+    <th>Pago</th>
+    <th>Fecha Pago</th>
+    <th>Medio de Pago</th>
+    <th>Referencia</th>
+    <th>Saldo Por Pagar</th>
+    <th>Observaciones</th>
+    <th>Acciones</th>
+  </tr>
+</thead>
+<tbody>
+{% for c in cuotas %}
+  <tr class="{% if c.es_vencida_roja %}table-danger{% endif %}">
+    <td>{{ c.contrato.estudiante.id }}</td>
+    <td>{{ c.contrato.estudiante.nombre_completo }}</td>
+    <td>{{ c.contrato.estudiante.acudiente.nombre_completo }}</td>
+    <td>{{ c.contrato.estudiante.nivel.nombre }}</td>
+    <td>{{ c.contrato.estudiante.horario.descripcion|default:"—" }}</td>
+
+    <td>{{ c.ultimo_pago_factura|default:"—" }}</td>
+    <td>{{ c.numero }}</td>
+    <td>{{ c.valor|moneda_puntos }}</td>
+    <td>{{ c.estado }}</td>
+    <td>{{ c.fecha_vencimiento|date:"Y-m-d" }}</td>
+
+    <td>
+      {% if c.pagado and c.pagado|floatformat:0 != "0" %}
+        {{ c.pagado|moneda_puntos }}
+      {% else %} — {% endif %}
+    </td>
+
+    <td>{{ c.ultimo_pago_fecha|date:"Y-m-d"|default:"" }}</td>
+
+    <td class="text-nowrap">
+      {% if c.ultimo_pago_medio %}
+        {% if c.ultimo_pago_medio == 'Transferencia' %}
+          Banco
+        {% else %}
+          {{ c.ultimo_pago_medio }}
+        {% endif %}
+      {% else %}
+        —
+      {% endif %}
+    </td>
+
+    <td>{{ c.ultimo_pago_referencia|default:"—" }}</td>
+
+    <td>
+      {% if c.saldo and c.saldo|floatformat:0 != "0" %}
+        {{ c.saldo|moneda_puntos }}
+      {% else %}
+        $0
+      {% endif %}
+    </td>
+
+    <td>{{ c.ultimo_pago_obs|default:"" }}</td>
+
+    <td>
+      <button type="button"
+              class="btn btn-sm btn-primary btn-aplicar-pago"
+              data-cuota="{{ c.id }}"
+              data-cuota-num="{{ c.numero }}"
+              data-est-id="{{ c.contrato.estudiante.id }}"
+              data-estudiante="{{ c.contrato.estudiante.nombre_completo }}"
+              data-acudiente="{{ c.contrato.estudiante.acudiente.nombre_completo }}"
+              data-nivel="{{ c.contrato.estudiante.nivel.nombre }}"
+              data-horario="{{ c.contrato.estudiante.horario.descripcion|default:'—' }}"
+              data-valor="{{ c.valor }}"
+              data-pagado="{{ c.pagado|default:0 }}"
+              data-vence="{{ c.fecha_vencimiento|date:'Y-m-d' }}">
+        Aplicar pago
+      </button>
+    </td>
+  </tr>
+{% empty %}
+  <tr><td colspan="17" class="text-center">No hay cuotas registradas.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if page_obj %}
+<nav aria-label="Paginación">
+  <ul class="pagination pagination-sm">
+    {% if page_obj.has_previous %}
+      <li class="page-item">
+        <a class="page-link" href="?page={{ page_obj.previous_page_number }}&per_page={{ per_page }}{% if request.GET %}&{{ request.GET.urlencode|safe|cut:'page='|cut:'per_page=' }}{% endif %}">«</a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">«</span></li>
+    {% endif %}
+
+    <li class="page-item disabled"><span class="page-link">Página {{ page_obj.number }} de {{ paginator.num_pages }}</span></li>
+
+    {% if page_obj.has_next %}
+      <li class="page-item">
+        <a class="page-link" href="?page={{ page_obj.next_page_number }}&per_page={{ per_page }}{% if request.GET %}&{{ request.GET.urlencode|safe|cut:'page='|cut:'per_page=' }}{% endif %}">»</a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">»</span></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+
+<!-- ====== MODAL: APLICAR PAGO ====== -->
+<style>
+  #modalPago .modal-body{ max-height: 70vh; overflow-y: auto; }
+  #mp-historial-wrap{
+    height: 28vh; overflow-y: auto; overflow-x: hidden;
+    border: 1px solid #eee; border-radius: .25rem; background: #fff;
+  }
+  #mp-historial-wrap thead th{ position: sticky; top: 0; z-index: 1; background: #f8f9fa; }
+</style>
+
+<div class="modal fade" id="modalPago" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="pagoForm">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title">Aplicar pago a cuota <span id="mp-cuota-num"></span></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+
+        <div class="modal-body">
+          <input type="hidden" name="cuota_id" id="mp-cuota-id">
+          <input type="hidden" name="modo" id="mp-modo" value="">
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Estudiante</label>
+              <input class="form-control" id="mp-estudiante" type="text" readonly>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Acudiente</label>
+              <input class="form-control" id="mp-acudiente" type="text" readonly>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Nivel</label>
+              <input class="form-control" id="mp-nivel" type="text" readonly>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Horario</label>
+              <input class="form-control" id="mp-horario" type="text" readonly>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Vence</label>
+              <input class="form-control" id="mp-vence" type="text" readonly>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Valor cuota</label>
+              <input class="form-control" id="mp-valor" type="text" readonly>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Pagado</label>
+              <input class="form-control" id="mp-pagado" type="text" readonly>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Saldo por pagar</label>
+              <input class="form-control" id="mp-saldo" type="text" readonly>
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label">Fecha pago</label>
+              <input class="form-control" name="fecha_pago" id="mp-fecha" type="date" value="{{ hoy|date:'Y-m-d' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Forma de pago</label>
+              <select class="form-select" name="forma_pago" id="mp-forma">
+                <option value="Banco">Banco</option>
+                <option value="Nequi">Nequi</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Efectivo">Efectivo</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">N° factura (opcional)</label>
+              <input class="form-control" name="numero_factura" id="mp-factura" type="text" maxlength="30">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Referencia <span class="text-danger">*</span></label>
+              <input class="form-control" name="referencia" id="mp-referencia" type="text" maxlength="100" required>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Valor a pagar</label>
+              <input class="form-control" name="valor_pagado" id="mp-valor-pagar" type="number" step="1" min="1" required>
+              <div class="form-text" id="mp-ayuda"></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Observaciones</label>
+              <textarea class="form-control" name="observacion" id="mp-obs" rows="2"></textarea>
+            </div>
+
+            <div class="col-12 d-flex justify-content-end gap-2">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+              <button type="submit" class="btn btn-primary">Aplicar pago</button>
+            </div>
+          </div>
+
+          <div id="mp-previas-wrap" class="d-none mt-3">
+            <div class="alert alert-warning py-2 px-3 small mb-2">
+              Existen <strong>cuotas anteriores con saldo pendiente</strong>. Puedes
+              <em>distribuir automáticamente</em> este pago priorizando las cuotas más antiguas.
+            </div>
+            <table class="table table-sm table-bordered mb-2">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:90px;">Cuota #</th>
+                  <th>Vence</th>
+                  <th>Saldo</th>
+                </tr>
+              </thead>
+              <tbody id="mp-previas-body"></tbody>
+            </table>
+            <div class="d-flex justify-content-end gap-2">
+              <button type="button" id="mp-btn-auto" class="btn btn-outline-primary btn-sm">
+                Aplicar automáticamente (anteriores primero)
+              </button>
+            </div>
+          </div>
+
+          <hr class="my-3">
+          <h6 class="mb-2">Historial de pagos de esta cuota</h6>
+          <div id="mp-historial-wrap">
+            <table class="table table-sm table-bordered mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th style="width: 60px;">N°</th>
+                  <th>Fecha</th>
+                  <th>Valor</th>
+                  <th>Medio</th>
+                  <th>Factura</th>
+                  <th>Referencia</th>
+                  <th>Observación</th>
+                  <th style="width: 120px;">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="mp-historial-body">
+                <tr><td colspan="8" class="text-muted">Sin pagos.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- sin modal-footer -->
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- === Config para el JS externo + import del archivo estático === -->
+<div id="cxc-config"
+     data-aplicar-url="{% url 'aplicar_pago' %}"
+     data-eliminar-url="{% url 'eliminar_pago' %}"
+     data-hoy="{{ hoy|date:'Y-m-d' }}">
+</div>
+<script src="{% static 'js/cxc.js' %}"></script>
+
+{% endblock %}

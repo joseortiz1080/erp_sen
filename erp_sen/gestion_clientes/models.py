@@ -1,4 +1,5 @@
 from django.db import models
+from decimal import Decimal
 
 class Horario(models.Model):
     hora = models.TimeField(unique=True)  # Ejemplo: 08:00:00
@@ -6,6 +7,7 @@ class Horario(models.Model):
 
     def __str__(self):
         return self.descripcion
+
 
 class Sede(models.Model):
     nombre = models.CharField(max_length=100)
@@ -15,15 +17,24 @@ class Sede(models.Model):
     def __str__(self):
         return f"{self.nombre} - {self.ciudad}"
 
+
 class Acudiente(models.Model):
+    TIPOS_DOCUMENTO = [
+        ('CC', 'Cédula'),
+        ('TI', 'Tarjeta de Identidad'),
+        ('CE', 'Cédula de Extranjería'),
+        ('PAS', 'Pasaporte'),
+    ]
+
     nombre_completo = models.CharField(max_length=150)
-    tipo_documento = models.CharField(max_length=10, choices=[('CC', 'Cédula'), ('TI', 'Tarjeta de Identidad')])
+    tipo_documento = models.CharField(max_length=10, choices=TIPOS_DOCUMENTO)
     documento = models.CharField(max_length=20, unique=True)
     telefono = models.CharField(max_length=20)
     email = models.EmailField(unique=True)
 
     def __str__(self):
         return self.nombre_completo
+
 
 class Nivel(models.Model):
     codigo = models.CharField(max_length=10, unique=True)  # Ej: A1, B2, Kids
@@ -33,6 +44,7 @@ class Nivel(models.Model):
     def __str__(self):
         return f"{self.codigo} - {self.nombre}"
 
+
 class Estudiante(models.Model):
     ESTADOS = [
         ('Activo', 'Activo'),
@@ -41,7 +53,17 @@ class Estudiante(models.Model):
         ('Graduado', 'Graduado'),
     ]
 
+    TIPOS_DOCUMENTO = [
+        ('CC', 'Cédula'),
+        ('TI', 'Tarjeta de Identidad'),
+        ('CE', 'Cédula de Extranjería'),
+        ('PAS', 'Pasaporte'),
+    ]
+
     nombre_completo = models.CharField(max_length=150)
+    tipo_documento = models.CharField(max_length=10, choices=TIPOS_DOCUMENTO, default='CC')
+    documento = models.CharField(max_length=20, unique=True)
+
     fecha_nacimiento = models.DateField()
     nivel = models.ForeignKey(Nivel, on_delete=models.PROTECT)
     acudiente = models.ForeignKey(Acudiente, on_delete=models.PROTECT)
@@ -53,7 +75,8 @@ class Estudiante(models.Model):
     horario = models.ForeignKey(Horario, on_delete=models.PROTECT, null=True, blank=True)
 
     def __str__(self):
-        return self.nombre_completo
+        return f"{self.nombre_completo} ({self.tipo_documento} {self.documento})" if self.documento else self.nombre_completo
+
 
 class Contrato(models.Model):
     estudiante = models.ForeignKey(Estudiante, on_delete=models.CASCADE)
@@ -73,8 +96,13 @@ class Contrato(models.Model):
     def calcular_saldo(self):
         return self.valor_total - self.calcular_total_pagado()
 
+    @property
+    def en_incumplimiento(self):
+        return self.cuota_set.filter(estado='Vencida').exists()
+
     def __str__(self):
-        return f"Contrato de {self.estudiante} - {self.estado}"
+        return f"Contrato #{self.id} de {self.estudiante} - {self.estado}"
+
 
 class Cuota(models.Model):
     contrato = models.ForeignKey(Contrato, on_delete=models.CASCADE)
@@ -89,23 +117,48 @@ class Cuota(models.Model):
         ('Parcial', 'Parcial'),
     ], default='Pendiente')
 
+    class Meta:
+        unique_together = (('contrato', 'numero'),)
+        ordering = ['fecha_vencimiento', 'numero']
+
     def calcular_saldo(self):
         return self.valor - self.valor_pagado
 
     def __str__(self):
         return f"Cuota {self.numero} de contrato {self.contrato.id}"
 
+
+# Asegúrate arriba del archivo:
+# from decimal import Decimal
+
 class Pago(models.Model):
     contrato = models.ForeignKey(Contrato, on_delete=models.CASCADE)
+    cuota = models.ForeignKey(Cuota, on_delete=models.CASCADE, null=True, blank=True, related_name='pagos')
+
     fecha_pago = models.DateField()
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
-    forma_pago = models.CharField(max_length=50, choices=[
-        ('Efectivo', 'Efectivo'), ('Transferencia', 'Transferencia'), ('Otro', 'Otro')
-    ])
-    observacion = models.TextField(blank=True, null=True)
 
-    # NUEVO CAMPO
-    referencia = models.CharField(max_length=100, blank=True, null=True)
+    FORMA_PAGO = [
+        ('Efectivo', 'Efectivo'),
+        ('Transferencia', 'Transferencia'),  # compatibilidad con datos existentes
+        ('Banco', 'Banco'),
+        ('Nequi', 'Nequi'),
+        ('Otro', 'Otro'),
+    ]
+    forma_pago = models.CharField(max_length=50, choices=FORMA_PAGO)
+
+    observacion = models.TextField(blank=True, null=True)
+    referencia = models.CharField(max_length=100, db_index=True)  # sin blank ni null
+
+    numero_factura = models.CharField(max_length=30, blank=True, null=True, db_index=True)
+
+    def clean(self):
+        if self.cuota and self.cuota.contrato_id != self.contrato_id:
+            from django.core.exceptions import ValidationError
+            raise ValidationError("La cuota seleccionada no pertenece a este contrato.")
+        if self.valor_pagado is None or self.valor_pagado <= Decimal('0'):
+            from django.core.exceptions import ValidationError
+            raise ValidationError("El valor del pago debe ser mayor a cero.")
 
     def __str__(self):
         return f"{self.fecha_pago} - ${self.valor_pagado}"

@@ -19,13 +19,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-_zz++35z=qnuv#o4u8-*!v0v1q^a%d_q^r!y86-k!usb+doom^'
+def env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in ("1", "true", "yes", "on")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool('DJANGO_DEBUG', True)
 
-ALLOWED_HOSTS = ['gestion.senidiomas.com']
+# SECURITY WARNING: keep the secret key used in production secret!
+if DEBUG:
+    # In development allow fallback to existing key to avoid breakage
+    SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-_zz++35z=qnuv#o4u8-*!v0v1q^a%d_q^r!y86-k!usb+doom^')
+else:
+    # In production require the key to be set in the environment
+    SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+    if not SECRET_KEY:
+        raise RuntimeError('DJANGO_SECRET_KEY must be set in production')
+
+# Comma-separated hosts, e.g. "gestion.senidiomas.com,api.senidiomas.com"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', 'gestion.senidiomas.com').split(',') if h.strip()]
+
+# CSRF trusted origins (full scheme), e.g. "https://gestion.senidiomas.com,https://www.senidiomas.com"
+_csrf_origins_env = os.getenv('DJANGO_CSRF_TRUSTED_ORIGINS', 'https://gestion.senidiomas.com')
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins_env.split(',') if o.strip()]
 
 
 # Application definition
@@ -42,6 +57,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # ← AÑADIR AQUÍ
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -49,6 +65,9 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# WhiteNoise: compresión + hashes para cache busting
+STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 ROOT_URLCONF = 'erp_sen.urls'
 
@@ -80,11 +99,11 @@ WSGI_APPLICATION = 'erp_sen.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'canadaws_erp_sen',
-        'USER': 'canadaws_erpuser',
-        'PASSWORD': 'm#^@f[ca@Q2=48kX',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'NAME': os.getenv('DB_NAME', 'canadaws_erp_sen'),
+        'USER': os.getenv('DB_USER', 'canadaws_erpuser'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'm#^@f[ca@Q2=48kX'),  # ← DEFAULT agregado
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'"
@@ -130,10 +149,32 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+STATIC_URL = '/static/'
+
+# Fuentes de estáticos en desarrollo (donde viven tus css/js/img)
+# Se agrega solo si la carpeta existe para evitar W004 en despliegues limpios
+STATICFILES_DIRS = []
+_static_dir = BASE_DIR / 'erp_sen' / 'static'
+if _static_dir.exists():
+    STATICFILES_DIRS.append(_static_dir)
+
+# Destino de compilación para producción (collectstatic)
+STATIC_ROOT = BASE_DIR / 'static'
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Security hardening for production
+if not DEBUG:
+    SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', True)
+    SESSION_COOKIE_SECURE = env_bool('DJANGO_SESSION_COOKIE_SECURE', True)
+    CSRF_COOKIE_SECURE = env_bool('DJANGO_CSRF_COOKIE_SECURE', True)
+    SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
+    SECURE_HSTS_PRELOAD = env_bool('DJANGO_SECURE_HSTS_PRELOAD', True)
+    # Uncomment if behind a proxy/ALB that sets X-Forwarded-Proto
+    if env_bool('DJANGO_USE_PROXY_SSL_HEADER', False):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

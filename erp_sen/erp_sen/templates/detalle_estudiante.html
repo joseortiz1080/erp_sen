@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% load filtros_monetarios %}
+
+{% block title %}Detalle del Estudiante{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Detalle del Estudiante</h2>
+
+<table class="table table-bordered">
+  <tr>
+    <th>ID</th>
+    <td>{{ estudiante.id }}</td>
+  </tr>
+  <tr>
+    <th>Nombre completo</th>
+    <td>{{ estudiante.nombre_completo }}</td>
+  </tr>
+  <tr>
+    <th>Fecha de nacimiento</th>
+    <td>{{ estudiante.fecha_nacimiento }}</td>
+  </tr>
+  <tr>
+    <th>Nivel</th>
+    <td>{{ estudiante.nivel.nombre }}</td>
+  </tr>
+  <tr>
+    <th>Acudiente</th>
+    <td>{{ estudiante.acudiente }}</td>
+  </tr>
+  <tr>
+    <th>Sede</th>
+    <td>{{ estudiante.sede }}</td>
+  </tr>
+  <tr>
+    <th>Horario</th>
+    <td>{{ estudiante.horario|default:"—" }}</td>
+  </tr>
+  <tr>
+    <th>Estado</th>
+    <td>{{ estudiante.estado }}</td>
+  </tr>
+  <tr>
+    <th>Valor del paquete</th>
+    <td>{{ estudiante.valor_paquete_total|moneda_puntos }}</td>
+  </tr>
+  <tr>
+    <th>Observación</th>
+    <td>{{ estudiante.observacion|default:"—" }}</td>
+  </tr>
+</table>
+
+<a href="{% url 'listar_estudiantes' %}" class="btn btn-secondary mt-3">← Volver al listado</a>
+
+{% if contrato %}
+<hr>
+<h3 class="mt-5">Contrato Actual</h3>
+<table class="table table-bordered">
+  <tr>
+    <th>Número de contrato</th>
+    <td>{{ contrato.id }}</td>
+  </tr>
+  <tr>
+    <th>Estado del contrato</th>
+    <td>{{ contrato.estado }}</td>
+  </tr>
+  <tr>
+    <th>Valor total del contrato</th>
+    <td>{{ contrato.valor_total|moneda_puntos }}</td>
+  </tr>
+  <tr>
+    <th>Número de cuotas</th>
+    <td>{{ contrato.numero_cuotas }}</td>
+  </tr>
+</table>
+
+<h4 class="mt-4">Cuotas del contrato</h4>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th># Cuota</th>
+      <th>Vencimiento</th>
+      <th>Valor</th>
+      <th>Pagado</th>
+      <th>Estado</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for cuota in cuotas %}
+    <tr class="{% if cuota.estado == 'Vencida' %}table-danger{% endif %}">
+      <td>{{ cuota.numero }}</td>
+      <td>{{ cuota.fecha_vencimiento|date:"M d, Y" }}</td>
+      <td>{{ cuota.valor|moneda_puntos }}</td>
+      <td>{{ cuota.valor_pagado|moneda_puntos }}</td>
+      <td class="{% if cuota.estado == 'Vencida' %}text-danger fw-bold{% endif %}">
+          {{ cuota.estado }}
+      </td>
+    </tr>
+
+    {% empty %}
+    <tr>
+      <td colspan="5">Este contrato no tiene cuotas registradas.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="alert alert-warning mt-5">Este estudiante no tiene contratos registrados.</div>
+{% endif %}
+
+{% endblock %}
