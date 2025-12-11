@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load filtros_monetarios %}
+
+{% block content %}
+<div class="container mt-4">
+              {% if messages %}
+              {% for m in messages %}
+                <div class="alert alert-{{ m.tags }} shadow-sm">{{ m }}</div>
+              {% endfor %}
+              {% endif %} 
+  <!-- Card: Formulario de Ingreso -->
+  <div class="card shadow mb-4">
+    <div class="card-header bg-primary text-white">
+      <h5 class="mb-0">Registrar Ingreso</h5>
+    </div>
+    <div class="card-body">
+      {% if form.errors %}
+        <div class="alert alert-danger">
+          {{ form.errors }}
+        </div>
+      {% endif %}
+
+      <form method="post" class="row g-3">
+        {% csrf_token %}
+
+        <!-- Línea 1 -->
+        <div class="col-md-4">
+          {{ form.sede.label_tag }}
+          {{ form.sede }}
+        </div>
+        <div class="col-md-4">
+          {{ form.tipo_ingreso.label_tag }}
+          {{ form.tipo_ingreso }}
+        </div>
+        <div class="col-md-4">
+          {{ form.valor_pagado.label_tag }}
+          {{ form.valor_pagado }}
+        </div>
+
+        <!-- Línea 2 -->
+        <div class="col-md-4">
+          {{ form.fecha_pago.label_tag }}
+          {{ form.fecha_pago }}
+        </div>
+        <div class="col-md-4">
+          {{ form.forma_pago.label_tag }}
+          {{ form.forma_pago }}
+        </div>
+        <div class="col-md-4">
+          {{ form.referencia.label_tag }}
+          {{ form.referencia }}
+        </div>
+
+        <!-- Línea 3 -->
+        <div class="col-md-12">
+          {{ form.observacion.label_tag }}
+          {{ form.observacion }}
+        </div>
+
+        <!-- Botón -->
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-success">Guardar</button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- Card: Listado de Ingresos -->
+  <div class="card shadow">
+    <div class="card-header bg-secondary text-white">
+      <h5 class="mb-0">Ingresos Registrados</h5>
+    </div>
+    <div class="card-body">
+      {% if ingresos %}
+      <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+        <table class="table table-sm table-striped table-hover align-middle">
+          <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Fecha</th>
+            <th>Recibido</th>
+            <th>Concepto</th>
+            <th>Valor</th>
+            <th>Forma de Pago</th>
+            <th>Referencia</th>
+            <th>Observación</th>
+            <th>Sede</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ingreso in ingresos %}
+          <tr>
+            <td>{{ ingreso.id }}</td>
+            <td>{{ ingreso.fecha_pago|date:"d/m/Y" }}</td>
+            <td>{{ ingreso.usuario_registro.get_full_name|default:ingreso.usuario_registro.username }}</td>
+            <td>{{ ingreso.tipo_ingreso }}</td>
+            <td>{{ ingreso.valor_pagado|moneda_puntos }}</td>
+            <td>{{ ingreso.forma_pago }}</td>
+            <td>{{ ingreso.referencia }}</td>
+            <td>{{ ingreso.observacion }}</td>
+            <td>{{ ingreso.sede.nombre }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+
+        </table>
+      </div>
+      {% else %}
+        <p class="text-muted">Aún no has registrado ingresos.</p>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

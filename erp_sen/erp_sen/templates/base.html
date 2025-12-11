@@ -52,6 +52,13 @@
             <li class="nav-item mb-2">
                 <a class="nav-link text-dark" href="{% url 'listado_cxc' %}"><i class="bi bi-people"></i> Cuentas por Cobrar</a>
             </li>
+            <li class="nav-item mb-2">
+                <a class="nav-link text-dark" href="{% url 'nuevo_contrato' %}"><i class="bi bi-people"></i>Nuevo Contrato</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link text-dark" href="{% url 'nuevo_ingreso' %}"><i class="bi bi-people"></i>Reportar un Ingreso</a>
+            </li>
+
         </ul>
     </div>
 
@@ -75,11 +82,12 @@
     </div>
 </div>
 
-<!-- (Opcional) segundo bundle; puedes dejarlo si lo necesitas -->
+<!-- Bootstrap bundle y otros scripts globales -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
-    // Proteger por si el submenu no existe (evita romper otros scripts de la página)
+    // Manejo de íconos del submenu (si aplica)
     const submenu = document.getElementById('submenuPruebas');
     const icon = document.getElementById('iconPruebas');
 
@@ -93,6 +101,11 @@
         });
     }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+{# Cargar JS específico solo en la URL /nuevo-contrato/ #}
+{% if request.path == '/nuevo-contrato/' %}
+  <script src="{% static 'js/nuevo_contrato.js' %}"></script>
+{% endif %}
+
 </body>
 </html>

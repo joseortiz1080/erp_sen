@@ -10,7 +10,10 @@ from gestion_clientes.views import (
     listado_cxc,           # cxc
     aplicar_pago,          # pago/aplicar
     eliminar_pago,         # pago/eliminar
-    logout_view,           # logout  ← IMPORTANTE
+    nuevo_contrato,        # nuevo-contrato
+    logout_view,           # logout
+    buscar_acudiente_por_documento,
+    nuevo_ingreso 
 )
 
 urlpatterns = [
@@ -25,6 +28,9 @@ urlpatterns = [
     path('cxc/', listado_cxc, name='listado_cxc'),
     path('pago/aplicar/', aplicar_pago, name='aplicar_pago'),
     path('pago/eliminar/', eliminar_pago, name='eliminar_pago'),
+    path('nuevo-contrato/', nuevo_contrato, name='nuevo_contrato'),
+    path('logout/', logout_view, name='logout'),
+    path('api/acudientes/buscar/', buscar_acudiente_por_documento, name='buscar_acudiente'),
+    path('ingresos/nuevo/', nuevo_ingreso, name='nuevo_ingreso'),
 
-    path('logout/', logout_view, name='logout'),  # ← usa la vista importada, no "views.logout_view"
 ]

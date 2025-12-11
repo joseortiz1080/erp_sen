@@ -1,0 +1,3 @@
+# Dependencias mínimas para el proyecto
+Django>=4.2,<5
+# Añade aquí otras dependencias si las necesitas (ej: psycopg2-binary, djangorestframework)

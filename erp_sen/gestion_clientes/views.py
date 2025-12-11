@@ -1,7 +1,5 @@
-from decimal import Decimal
-
+from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth import authenticate, login, logout
-
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -14,11 +12,11 @@ from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils.timezone import now
 from django.views.decorators.http import require_POST
-
 from django.views.decorators.http import require_GET
-
-from .models import Estudiante, Contrato, Cuota, Pago, Nivel, Horario, Sede
-
+from .models import Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente
+from .forms import AcudienteForm, EstudianteForm, ContratoForm
+from django.contrib import messages
+from .forms import IngresoForm
 
 
 @require_POST
@@ -124,7 +122,9 @@ def listado_cxc(request):
                 output_field=BooleanField()
             )
         )
-        .order_by('contrato__estudiante__id', 'fecha_vencimiento', 'numero')
+        # ID de la cuota primero (desc) para que las más recientes queden arriba
+        .order_by('-id', 'contrato__estudiante__id', 'fecha_vencimiento', 'numero')
+
     )
 
     # --------- Seguridad por sede ---------
@@ -534,14 +534,245 @@ def eliminar_pago(request):
             )
         )['total'] or Decimal('0.00')
 
-        cuota.valor_pagado = nuevo_pagado
+        hoy = now().date()
+
         if nuevo_pagado >= cuota.valor:
             cuota.estado = 'Pagada'
-        elif nuevo_pagado > 0:
+        elif cuota.fecha_vencimiento < hoy and nuevo_pagado < cuota.valor:
+            cuota.estado = 'Vencida'
+        elif nuevo_pagado > 0 and nuevo_pagado < cuota.valor:
             cuota.estado = 'Parcial'
         else:
-            # No forzamos 'Vencida' aquí; otra rutina puede marcar por fecha
             cuota.estado = 'Pendiente'
+
+        cuota.valor_pagado = nuevo_pagado
         cuota.save(update_fields=['valor_pagado', 'estado'])
 
     return JsonResponse({'ok': True})
+
+
+@login_required
+@transaction.atomic
+def nuevo_contrato(request):
+    # imports locales para que puedas pegar solo esta función
+    from django.utils.dateparse import parse_date
+    from django.db import IntegrityError
+
+    # Helper: lee primero con prefijo y, si no existe, sin prefijo
+    def _p(key_pref, key_plain, default=None):
+        val = request.POST.get(key_pref)
+        if val is None or val == "":
+            val = request.POST.get(key_plain, default)
+        return val
+
+    if request.method == 'POST':
+        # Formularios alineados con tu HTML (usa prefijos)
+        estudiante_form = EstudianteForm(request.POST, prefix='estudiante')
+        contrato_form  = ContratoForm(request.POST)
+
+        # ---------------------
+        # ACUDIENTE (reuso por documento)
+        # ---------------------
+        doc_acu = _p('acudiente-documento', 'documento', '')
+        acudiente = None
+
+        if doc_acu:
+            # Si existe, se reutiliza y no bloquea por email ni unicidad
+            acudiente = Acudiente.objects.filter(documento=doc_acu).first()
+
+        if acudiente:
+            # Solo para re-render sin validación (evita “already exists”)
+            acudiente_form = AcudienteForm(prefix='acudiente')
+        else:
+            # No existe → se crea (email ya no es unique)
+            acudiente_form = AcudienteForm(request.POST, prefix='acudiente')
+            if acudiente_form.is_valid():
+                acudiente = acudiente_form.save()
+            else:
+                return render(request, 'nuevo_contrato.html', {
+                    'form_acudiente': acudiente_form,
+                    'form_estudiante': EstudianteForm(request.POST, prefix='estudiante'),
+                    'form_contrato':  contrato_form,
+                })
+        # ---------------------
+        # ESTUDIANTE (garantizado)
+        # ---------------------
+        if estudiante_form.is_valid():
+            estudiante = estudiante_form.save(commit=False)
+            estudiante.acudiente = acudiente
+            estudiante.save()
+        else:
+            # Fallback directo a BD si el ModelForm no valida
+            try:
+                nombre     = _p('estudiante-nombre_completo', 'nombre_completo', '')
+                tipo_doc   = _p('estudiante-tipo_documento', 'tipo_documento', 'CC')
+                documento  = _p('estudiante-documento', 'documento', '')
+                fecha_nac  = parse_date(_p('estudiante-fecha_nacimiento', 'fecha_nacimiento', ''))
+                nivel_id   = _p('estudiante-nivel', 'nivel')
+                sede_id    = _p('estudiante-sede', 'sede')
+                estado     = _p('estudiante-estado', 'estado', 'Activo')
+                observ     = _p('estudiante-observacion', 'observacion', '')
+                horario_id = _p('estudiante-horario', 'horario')
+                estudiante, _ = Estudiante.objects.get_or_create(
+                    documento=documento,
+                    defaults={
+                        'nombre_completo': nombre,
+                        'tipo_documento': tipo_doc or 'CC',
+                        'fecha_nacimiento': fecha_nac,
+                        'nivel_id': nivel_id,
+                        'sede_id': sede_id,
+                        'estado': estado or 'Activo',
+                        'observacion': observ or '',
+                        'horario_id': (horario_id or None),
+                        'acudiente': acudiente,
+                    }
+                )
+                # Garantiza asociación correcta al acudiente reutilizado/creado
+                if estudiante.acudiente_id != acudiente.id:
+                    estudiante.acudiente = acudiente
+                    estudiante.save(update_fields=['acudiente'])
+            except IntegrityError as e:
+                estudiante_form.add_error(None, f'No se pudo crear el estudiante (integridad): {e}')
+                return render(request, 'nuevo_contrato.html', {
+                    'form_acudiente': acudiente_form,
+                    'form_estudiante': estudiante_form,
+                    'form_contrato': contrato_form,
+                })
+            except Exception as e:
+                estudiante_form.add_error(None, f'No se pudo crear el estudiante: {e}')
+                return render(request, 'nuevo_contrato.html', {
+                    'form_acudiente': acudiente_form,
+                    'form_estudiante': estudiante_form,
+                    'form_contrato': contrato_form,
+                })
+        # ---------------------
+        # CONTRATO
+        # ---------------------
+        # Evita segundo contrato para el mismo estudiante
+        if Contrato.objects.filter(estudiante=estudiante).exists():
+            contrato_form.add_error(None, 'Este estudiante ya tiene un contrato registrado.')
+            return render(request, 'nuevo_contrato.html', {
+                'form_acudiente': acudiente_form,
+                'form_estudiante': estudiante_form,
+                'form_contrato': contrato_form,
+            })
+
+        if contrato_form.is_valid():
+            contrato = contrato_form.save(commit=False)
+            contrato.acudiente = acudiente
+            contrato.estudiante = estudiante
+
+            # Cálculo robusto en servidor (cuota con 2 decimales redondeada)
+            valor_por_cuota = (
+                Decimal(contrato.valor_total) / Decimal(contrato.numero_cuotas)
+            ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            contrato.valor_cuota_pactada = valor_por_cuota
+
+            contrato.save()
+
+            # Crear cuotas con ese valor
+            for i in range(1, contrato.numero_cuotas + 1):
+                Cuota.objects.create(
+                    contrato=contrato,
+                    numero=i,
+                    fecha_vencimiento=contrato.fecha_inicio,
+                    valor=valor_por_cuota
+                )
+            return redirect('listar_estudiantes')
+
+        # Si el contrato no valida, se devuelven errores
+        return render(request, 'nuevo_contrato.html', {
+            'form_acudiente': acudiente_form,
+            'form_estudiante': estudiante_form,
+            'form_contrato': contrato_form,
+        })
+
+
+    # GET → formularios vacíos con los mismos prefijos que usa el HTML
+    return render(request, 'nuevo_contrato.html', {
+        'form_acudiente': AcudienteForm(prefix='acudiente'),
+        'form_estudiante': EstudianteForm(prefix='estudiante'),
+        'form_contrato': ContratoForm(),
+    })
+
+@require_GET
+def buscar_acudiente_por_documento(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    documento_raw = request.GET.get("documento")
+    if not documento_raw or not documento_raw.strip():
+        return JsonResponse({"existe": False, "error": "Documento inválido"}, status=400)
+
+    documento = documento_raw.strip()  # 🔹 Mantener alfanumérico
+
+    try:
+        acudiente = Acudiente.objects.get(documento=documento)
+        data = {
+            "existe": True,
+            "nombre_completo": acudiente.nombre_completo,
+            "tipo_documento": acudiente.tipo_documento,
+            "telefono": acudiente.telefono,
+            "email": acudiente.email,
+        }
+    except Acudiente.DoesNotExist:
+        data = {"existe": False}
+
+    return JsonResponse(data)
+
+@login_required
+def nuevo_ingreso(request):
+    ES_CLEVEL = request.user.is_superuser or request.user.groups.filter(
+        name__in=['Admin', 'CEO', 'CFO']
+    ).exists()
+
+    if request.method == 'POST':
+        form = IngresoForm(request.POST, user=request.user)
+        if form.is_valid():
+            ingreso = form.save(commit=False)
+            ingreso.usuario_registro = request.user
+
+            if not ES_CLEVEL:
+                perfil = getattr(request.user, 'perfil', None)
+                if not perfil or perfil.sedes.count() == 0:
+                    messages.error(request, 'Tu usuario no tiene sede asignada.')
+                    return redirect('nuevo_ingreso')
+
+                # Validar que la sede elegida está entre las permitidas
+                if ingreso.sede not in perfil.sedes.all():
+                    messages.error(request, 'No tienes permiso para registrar en esa sede.')
+                    return redirect('nuevo_ingreso')
+
+            # 🔹 Forzar tipo_registro a 'otro_ingreso' cuando viene del formulario
+            ingreso.tipo_registro = 'otro_ingreso'
+            ingreso.save()
+            messages.success(request, 'Ingreso registrado correctamente.')
+            return redirect('nuevo_ingreso')
+        else:
+            messages.error(request, 'Error al guardar el ingreso. Revisa los campos.')
+    else:
+        form = IngresoForm(user=request.user)
+
+# --------- Listado de ingresos ---------
+        if ES_CLEVEL:
+            ingresos = (
+                Ingreso.objects
+                .filter(tipo_registro='otro_ingreso')
+                .select_related('sede', 'usuario_registro')
+                .order_by('-id')
+            )
+        else:
+            ingresos = (
+                Ingreso.objects
+                .filter(usuario_registro=request.user, tipo_registro='otro_ingreso')
+                .select_related('sede', 'usuario_registro')
+                .order_by('-id')
+            )
+
+
+    return render(request, 'nuevo_ingreso.html', {
+        'form': form,
+        'ingresos': ingresos,
+    })
+
+

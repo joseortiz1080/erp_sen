@@ -1,0 +1,36 @@
+/* tarjetas suaves y tipografías */
+.card-soft{ border:1px solid #e9ecef; border-radius:16px; box-shadow:0 6px 14px rgba(16,24,40,.05);}
+.section-title{ font-weight:600; font-size:1rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.75rem; color:#475467; }
+.form-label{ font-weight:600; color:#344054; }
+.form-text{ color:#667085; }
+
+/* inputs y espaciados */
+input.form-control, select.form-select, textarea.form-control{
+  border-radius:12px;
+}
+.input-group-text{ border-radius:12px 0 0 12px; }
+.text-end{text-align:right}
+
+/* barra de acciones fija (agradable) */
+.action-bar{
+  position:sticky; bottom:0; z-index: 1020; padding:.75rem 0; background:linear-gradient(180deg, rgba(255,255,255,0) 0%, #fff 40%);
+  border-top: 1px solid #e9ecef; margin-top:1rem;
+}
+.action-bar .container-action{ display:flex; gap:.75rem; }
+
+/* contenedor general */
+.container-xl{ max-width:1040px; }
+
+/* mensajes */
+.alert{ border-radius:12px; }
+
+.section-heading {
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: #2c3e50; /* tono sobrio empresarial */
+  border-bottom: 2px solid #dee2e6;
+  padding-bottom: 6px;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

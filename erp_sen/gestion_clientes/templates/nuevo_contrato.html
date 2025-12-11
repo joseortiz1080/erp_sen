@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% load static %}
+{% load form_helpers %}
+
+{% block title %}Crear nuevo contrato{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/formulario_unico2.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="container-xl py-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0">Crear nuevo contrato</h2>
+    <a href="{% url 'listado_cxc' %}" class="btn btn-outline-secondary btn-sm">Volver</a>
+  </div>
+  
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    <div class="row g-4">
+      <!-- Acudiente -->
+      <div class="col-12 col-lg-6">
+        <section class="card card-soft h-100">
+          <div class="card-body">
+            <h5 class="section-heading">Acudiente</h5>
+
+            <!-- Buscar acudiente (input -> ayuda -> botón -> mensaje) -->
+            <div class="mb-4">
+              <label class="form-label">Buscar acudiente existente</label>
+              <div class="p-3 border rounded-3">
+                <input type="text" id="buscar_cedula" class="form-control mb-2" placeholder="Ej. 123456789">
+                <div class="form-text mb-3">Si el acudiente ya existe, se cargarán sus datos automáticamente.</div>
+                <button type="button" id="btn-buscar-acudiente" class="btn btn-secondary w-100">Buscar</button>
+                <div class="small mt-2">
+                  <span id="acudiente-msg" class="text-danger"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Datos del acudiente -->
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label">Nombre completo</label>
+                {{ form_acudiente.nombre_completo|add_class:"form-control"|attr:"placeholder:Ej. María Gómez" }}
+                {% for error in form_acudiente.nombre_completo.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Tipo documento</label>
+                {{ form_acudiente.tipo_documento|add_class:"form-select" }}
+                {% for error in form_acudiente.tipo_documento.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Documento</label>
+                {{ form_acudiente.documento|add_class:"form-control"|attr:"placeholder:123456789" }}
+                {% for error in form_acudiente.documento.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Teléfono</label>
+                {{ form_acudiente.telefono|add_class:"form-control"|attr:"placeholder:300 123 4567" }}
+                {% for error in form_acudiente.telefono.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Email</label>
+                {{ form_acudiente.email|add_class:"form-control"|attr:"placeholder:correo@dominio.com" }}
+                {% for error in form_acudiente.email.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Nuevo Estudiante -->
+      <div class="col-12 col-lg-6">
+        <section class="card card-soft h-100">
+          <div class="card-body">
+            <h5 class="section-heading">Nuevo Estudiante</h5>
+
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label">Nombre completo</label>
+                {{ form_estudiante.nombre_completo|add_class:"form-control"|attr:"placeholder:Ej. Juan Pérez" }}
+                {% for error in form_estudiante.nombre_completo.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Tipo documento</label>
+                {{ form_estudiante.tipo_documento|add_class:"form-select" }}
+                {% for error in form_estudiante.tipo_documento.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Documento</label>
+                {{ form_estudiante.documento|add_class:"form-control" }}
+                {% for error in form_estudiante.documento.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Fecha nacimiento</label>
+                {{ form_estudiante.fecha_nacimiento|add_class:"form-control" }}
+                {% for error in form_estudiante.fecha_nacimiento.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Nivel</label>
+                {{ form_estudiante.nivel|add_class:"form-select" }}
+                {% for error in form_estudiante.nivel.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Sede</label>
+                {{ form_estudiante.sede|add_class:"form-select" }}
+                {% for error in form_estudiante.sede.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-6">
+                <label class="form-label">Estado</label>
+                {{ form_estudiante.estado|add_class:"form-select" }}
+                {% for error in form_estudiante.estado.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-12">
+                <label class="form-label">Observación</label>
+                {{ form_estudiante.observacion|add_class:"form-control"|attr:"rows:4,placeholder:Notas u observaciones relevantes" }}
+                {% for error in form_estudiante.observacion.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+              <div class="col-12">
+                <label class="form-label">Horario</label>
+                {{ form_estudiante.horario|add_class:"form-select" }}
+                {% for error in form_estudiante.horario.errors %}
+                  <div class="text-danger small">{{ error }}</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Contrato -->
+    <section class="card card-soft mt-4">
+      <div class="card-body">
+        <h5 class="section-heading">Datos del Contrato</h5>
+
+        <div class="row g-3">
+          <!-- 1) Valor total -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Valor total</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              {{ form_contrato.valor_total|add_class:"form-control text-end" }}
+            </div>
+            {% for error in form_contrato.valor_total.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <!-- 2) Número de cuotas -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Número de cuotas</label>
+            {{ form_contrato.numero_cuotas|add_class:"form-select" }}
+            {% for error in form_contrato.numero_cuotas.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <!-- 3) Valor cuota pactada (readonly, calculado) -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Valor cuota pactada</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              {{ form_contrato.valor_cuota_pactada|add_class:"form-control text-end bg-light"|attr:"type:text,readonly:readonly" }}
+            </div>
+            {% for error in form_contrato.valor_cuota_pactada.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <!-- 4) Fecha inicio -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Fecha inicio</label>
+            {{ form_contrato.fecha_inicio|add_class:"form-control" }}
+            {% for error in form_contrato.fecha_inicio.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <!-- 5) Fecha fin -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Fecha fin</label>
+            {{ form_contrato.fecha_fin|add_class:"form-control" }}
+            {% for error in form_contrato.fecha_fin.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+
+          <!-- 6) Estado -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Estado</label>
+            {{ form_contrato.estado|add_class:"form-select" }}
+            {% for error in form_contrato.estado.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Barra de acciones -->
+    <div class="action-bar mt-4">
+      <div class="container-action">
+        <button type="submit" class="btn btn-primary btn-lg px-4">Guardar todo</button>
+        <a href="{% url 'listar_estudiantes' %}" class="btn btn-light">Cancelar</a>
+      </div>
+    </div>
+
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/nuevo_contrato.js' %}"></script>
+{% endblock %}

@@ -157,6 +157,12 @@ STATICFILES_DIRS = []
 _static_dir = BASE_DIR / 'erp_sen' / 'static'
 if _static_dir.exists():
     STATICFILES_DIRS.append(_static_dir)
+    
+# Estáticos específicos de la app gestion_clientes
+_gc_static_dir = BASE_DIR / 'gestion_clientes' / 'static'
+if _gc_static_dir.exists():
+    STATICFILES_DIRS.append(_gc_static_dir)
+
 
 # Destino de compilación para producción (collectstatic)
 STATIC_ROOT = BASE_DIR / 'static'
