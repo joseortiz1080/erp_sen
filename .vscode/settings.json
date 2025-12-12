@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/erp_sen/.venv/bin/python",
+  "python.envFile": "${workspaceFolder}/erp_sen/.env",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/erp_sen",
+    "${workspaceFolder}/erp_sen/erp_sen",
+    "${workspaceFolder}/erp_sen/gestion_clientes"
+  ],
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.diagnosticMode": "openFilesOnly"
+}
