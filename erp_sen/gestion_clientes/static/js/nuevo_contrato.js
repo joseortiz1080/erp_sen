@@ -1,8 +1,8 @@
 document.addEventListener('DOMContentLoaded', function () {
-  // ====== BUSCAR ACUDIENTE (ya lo tenías) ======
-  const buscarBtn = document.getElementById("btn-buscar-acudiente");
+  // ====== BUSCAR ACUDIENTE ======
+  const buscarBtn   = document.getElementById("btn-buscar-acudiente");
   const inputCedula = document.getElementById("buscar_cedula");
-  const msg = document.getElementById("acudiente-msg");
+  const msg         = document.getElementById("acudiente-msg");
 
   if (buscarBtn && inputCedula && msg) {
     buscarBtn.addEventListener("click", function () {
@@ -21,13 +21,11 @@ document.addEventListener('DOMContentLoaded', function () {
         })
         .then(data => {
           if (data.existe) {
-            // Llenar campos del formulario
             document.querySelector("#id_acudiente-nombre_completo").value = data.nombre_completo || "";
-            document.querySelector("#id_acudiente-documento").value = cedula;
-            document.querySelector("#id_acudiente-telefono").value = data.telefono || "";
-            document.querySelector("#id_acudiente-email").value = data.email || "";
+            document.querySelector("#id_acudiente-documento").value       = cedula;
+            document.querySelector("#id_acudiente-telefono").value        = data.telefono || "";
+            document.querySelector("#id_acudiente-email").value           = data.email || "";
 
-            // Select tipo_documento
             const tipoDocField = document.querySelector("#id_acudiente-tipo_documento");
             if (tipoDocField) {
               const existeOpcion = [...tipoDocField.options].some(opt => opt.value === data.tipo_documento);
@@ -53,20 +51,17 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // ====== CÁLCULO AUTOMÁTICO DE VALOR CUOTA PACTADA ======
-  // IDs por defecto de Django (sin prefijo): id_valor_total, id_numero_cuotas, id_valor_cuota_pactada
   const $total   = document.getElementById('id_valor_total');
   const $cuotas  = document.getElementById('id_numero_cuotas');
   const $pactada = document.getElementById('id_valor_cuota_pactada');
 
-  // Marcar como solo lectura y con estilo visual suave
   if ($pactada) {
-    $pactada.readOnly = true;                // sigue enviándose al servidor
-    $pactada.classList.add('bg-light');      // opcional: efecto visual
+    $pactada.readOnly = true;
+    $pactada.classList.add('bg-light');
   }
 
   function toNumber(x) {
     if (x == null) return 0;
-    // Acepta 1.234,56 o 1234.56
     const s = String(x).replace(/[^0-9.,]/g, '').replace(',', '.');
     const n = parseFloat(s);
     return isFinite(n) ? n : 0;
@@ -74,15 +69,101 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function recalcCuota() {
     if (!$total || !$cuotas || !$pactada) return;
-    const total  = toNumber($total.value);
-    const n      = parseInt($cuotas.value || '0', 10);
-    const cuota  = (total > 0 && n > 0) ? (total / n) : 0;
+    const total = toNumber($total.value);
+    const n     = parseInt($cuotas.value || '0', 10);
+    const cuota = (total > 0 && n > 0) ? (total / n) : 0;
     $pactada.value = cuota ? cuota.toFixed(2) : '';
   }
 
   if ($total)  $total.addEventListener('input',  recalcCuota);
   if ($cuotas) $cuotas.addEventListener('change', recalcCuota);
-
-  // cálculo inicial por si hay datos precargados
   recalcCuota();
+
+  // ====== DÍA DE CORTE (5/20) + FECHAS ======
+  const $diaCorte    = document.getElementById('dia_corte');      // select del template
+  const $fechaInicio = document.getElementById('id_fecha_inicio');
+  const $fechaFin    = document.getElementById('id_fecha_fin');
+
+  // --- BLOQUEO DURO: INICIO y FIN visibles pero NO editables ---
+  [$fechaInicio, $fechaFin].forEach(($input) => {
+    if (!$input) return;
+    $input.readOnly = true;
+    $input.classList.add('bg-light');
+    $input.addEventListener('keydown',  e => e.preventDefault());
+    $input.addEventListener('keypress', e => e.preventDefault());
+    $input.addEventListener('paste',    e => e.preventDefault());
+    ['click','mousedown','pointerdown'].forEach(evt =>
+      $input.addEventListener(evt, e => e.preventDefault())
+    );
+  });
+
+  // Utils fecha
+  const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
+
+  function addMonthsKeepDay(d, months) {
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const targetMonthIndex = m + months;
+    const targetYear  = y + Math.floor(targetMonthIndex / 12);
+    const targetMonth = (targetMonthIndex % 12 + 12) % 12;
+    const lastDay     = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const day         = Math.min(d.getDate(), lastDay);
+    return new Date(targetYear, targetMonth, day);
+  }
+
+  function setDateInput($input, dateObj) {
+    if (!$input || !(dateObj instanceof Date) || isNaN(dateObj)) return;
+    const yyyy = dateObj.getFullYear();
+    const mm   = pad2(dateObj.getMonth() + 1);
+    const dd   = pad2(dateObj.getDate());
+    $input.value = `${yyyy}-${mm}-${dd}`;
+  }
+
+  function parseInputDate($input) {
+    if (!$input || !$input.value) return null;
+    const parts = $input.value.split('-');
+    if (parts.length !== 3) return null;
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const d = parseInt(parts[2], 10);
+    const dt = new Date(y, m - 1, d);
+    return isNaN(dt) ? null : dt;
+  }
+
+  // Setea fecha_inicio = mes siguiente con día 5 o 20
+  function setFechaInicioFromCorte() {
+    if (!$diaCorte || !$fechaInicio) return;
+    const corte = parseInt($diaCorte.value || '5', 10);
+    const today = new Date();
+    const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const lastDay   = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0).getDate();
+    const dia       = Math.min(corte, lastDay);
+    const start     = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), dia);
+    setDateInput($fechaInicio, start);
+    recalcFechaFin();
+  }
+
+  // fecha_fin = fecha_inicio + (n - 1) meses
+  function recalcFechaFin() {
+    if (!$fechaInicio || !$fechaFin || !$cuotas) return;
+    const n  = parseInt($cuotas.value || '0', 10);
+    const fi = parseInputDate($fechaInicio);
+    if (!fi || !(n > 0)) {
+      $fechaFin.value = '';
+      return;
+    }
+    const ff = addMonthsKeepDay(fi, n - 1);
+    setDateInput($fechaFin, ff);
+  }
+
+  // Eventos
+  if ($diaCorte) {
+    if ($fechaInicio && !$fechaInicio.value) setFechaInicioFromCorte();
+    $diaCorte.addEventListener('change', setFechaInicioFromCorte);
+  }
+  if ($fechaInicio) $fechaInicio.addEventListener('change', recalcFechaFin);
+  if ($cuotas)      $cuotas.addEventListener('change',  recalcFechaFin);
+
+  // Inicial
+  recalcFechaFin();
 });

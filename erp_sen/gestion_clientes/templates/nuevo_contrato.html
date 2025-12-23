@@ -195,32 +195,36 @@
             {% endfor %}
           </div>
 
-          <!-- 4) Fecha inicio -->
+          <!-- (Nuevo) Día de corte -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Día de corte</label>
+            <select id="dia_corte" name="dia_corte" class="form-select" required>
+              <option value="5">5</option>
+              <option value="20">20</option>
+            </select>
+            <div class="form-text">Se tomará del mes siguiente.</div>
+          </div>
+
+          <!-- 4) Fecha inicio (solo lectura, calculada automáticamente) -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha inicio</label>
-            {{ form_contrato.fecha_inicio|add_class:"form-control" }}
+            {{ form_contrato.fecha_inicio|add_class:"form-control bg-light"|attr:"readonly:readonly" }}
+            <div class="form-text">Se calcula automáticamente según el día de corte.</div>
             {% for error in form_contrato.fecha_inicio.errors %}
               <div class="text-danger small">{{ error }}</div>
             {% endfor %}
           </div>
 
-          <!-- 5) Fecha fin -->
+          <!-- 5) Fecha fin (solo lectura, calculada automáticamente) -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha fin</label>
-            {{ form_contrato.fecha_fin|add_class:"form-control" }}
+            {{ form_contrato.fecha_fin|add_class:"form-control bg-light"|attr:"readonly:readonly" }}
+            <div class="form-text">Se calcula automáticamente según el número de cuotas.</div>
             {% for error in form_contrato.fecha_fin.errors %}
               <div class="text-danger small">{{ error }}</div>
             {% endfor %}
           </div>
 
-          <!-- 6) Estado -->
-          <div class="col-12 col-md-4">
-            <label class="form-label">Estado</label>
-            {{ form_contrato.estado|add_class:"form-select" }}
-            {% for error in form_contrato.estado.errors %}
-              <div class="text-danger small">{{ error }}</div>
-            {% endfor %}
-          </div>
         </div>
       </div>
     </section>

@@ -4,6 +4,17 @@
 .form-label{ font-weight:600; color:#344054; }
 .form-text{ color:#667085; }
 
+  /* Evita clicks en el icono del calendario cuando es readonly */
+  #id_fecha_inicio[readonly]::-webkit-calendar-picker-indicator {
+    pointer-events: none;
+    opacity: .5;           /* solo efecto visual */
+  }
+  /* Cursor y fondo coherentes con campo bloqueado */
+  #id_fecha_inicio[readonly] {
+    background-color: #f8f9fa;
+    cursor: not-allowed;
+  }
+
 /* inputs y espaciados */
 input.form-control, select.form-select, textarea.form-control{
   border-radius:12px;

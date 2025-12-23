@@ -1,7 +1,9 @@
 from django.contrib import admin
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Sum, Value, DecimalField
+from django.db.models.functions import Coalesce
+
 from .models import (
     Sede, Acudiente, Estudiante, Contrato, Pago, Nivel, Horario,
     Cuota, PagoAplicacion, Perfil
@@ -51,22 +53,67 @@ class EstudianteAdmin(admin.ModelAdmin):
 @admin.register(Contrato)
 class ContratoAdmin(admin.ModelAdmin):
     list_display = (
-        'estudiante', 'acudiente', 'fecha_inicio', 'valor_total', 'estado',
-        'total_aplicado_via_pagos', 'saldo_via_aplicaciones',
+        'estudiante',
+        'acudiente',
+        'fecha_inicio',
+        'valor_total',
+        'estado',
+        'total_aplicado_via_pagos',   # calculado
+        'saldo_via_aplicaciones',     # calculado
     )
     list_filter = ('estado', 'fecha_inicio')
     search_fields = ('estudiante__nombre_completo', 'acudiente__nombre_completo')
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # Suma de valor_pagado en las CUOTAS del contrato
+        return qs.annotate(
+            _total_pagado=Coalesce(
+                Sum('cuota__valor_pagado'),
+                Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))
+            )
+        )
+
+    @admin.display(description='Total pagado', ordering='_total_pagado')
+    def total_aplicado_via_pagos(self, obj):
+        # Preferimos el valor anotado; si no existe, hacemos fallback agregando
+        total = getattr(obj, '_total_pagado', None)
+        if total is None:
+            total = obj.cuota_set.aggregate(
+                t=Coalesce(
+                    Sum('valor_pagado'),
+                    Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))
+                )
+            )['t'] or Decimal('0')
+        return total
+
+    @admin.display(description='Saldo')
+    def saldo_via_aplicaciones(self, obj):
+        total_pagado = self.total_aplicado_via_pagos(obj) or Decimal('0')
+        return (obj.valor_total or Decimal('0')) - total_pagado
 
 
 # Para que el autocomplete funcione buscando por contrato / estudiante:
 @admin.register(Cuota)
 class CuotaAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'contrato', 'numero', 'fecha_vencimiento',
-        'valor', 'valor_pagado', 'estado', 'saldo_via_aplicaciones',
+        'id',
+        'contrato',
+        'numero',
+        'fecha_vencimiento',
+        'valor',
+        'valor_pagado',
+        'estado',
+        'saldo_via_aplicaciones',  # calculado
     )
     list_filter = ('estado', 'fecha_vencimiento')
     search_fields = ('contrato__id', 'contrato__estudiante__nombre_completo')
+
+    @admin.display(description='Saldo')
+    def saldo_via_aplicaciones(self, obj):
+        valor = obj.valor or Decimal('0')
+        pagado = obj.valor_pagado or Decimal('0')
+        return valor - pagado
 
 
 # =========================
@@ -89,10 +136,9 @@ class PagoAdmin(admin.ModelAdmin):
     list_display = ('contrato', 'fecha_pago', 'valor_pagado', 'forma_pago', 'referencia', 'numero_factura')
     list_filter = ('fecha_pago', 'forma_pago')
     search_fields = ('contrato__estudiante__nombre_completo', 'referencia', 'numero_factura')
-    autocomplete_fields = ('contrato', 'cuota')  # permite buscar cuotas por contrato/estudiante
+    autocomplete_fields = ('contrato', 'cuota')
     save_on_top = True
 
-    # Campos visibles (incluye cuota legacy porque tú lo prefieres así)
     fields = (
         'contrato', 'cuota', 'fecha_pago', 'valor_pagado', 'forma_pago',
         'observacion', 'referencia', 'numero_factura'
@@ -125,17 +171,29 @@ class PagoAdmin(admin.ModelAdmin):
 
         # Recalcular cache y estado de la cuota en base a TODAS sus aplicaciones
         cuota = obj.cuota
-        total_aplicado = cuota.aplicaciones.aggregate(t=Sum('monto'))['t'] or Decimal('0')
-        cuota.valor_pagado = total_aplicado
+        total_aplicado = cuota.aplicaciones.aggregate(
+            t=Coalesce(
+                Sum('monto'),
+                Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))
+            )
+        )['t'] or Decimal('0')
 
+        cuota.valor_pagado = total_aplicado
         saldo = (cuota.valor or Decimal('0')) - total_aplicado
+
         if saldo <= 0:
             cuota.estado = 'Pagada'
         elif total_aplicado > 0:
             cuota.estado = 'Parcial'
         else:
             cuota.estado = 'Pendiente'
+
         cuota.save(update_fields=['valor_pagado', 'estado'])
+
+
+# =========================
+# Perfil embebido en usuarios
+# =========================
 
 class PerfilInline(admin.StackedInline):
     model = Perfil
@@ -143,9 +201,11 @@ class PerfilInline(admin.StackedInline):
     verbose_name_plural = 'Perfil'
     fk_name = 'user'
 
+
 class UsuarioAdmin(UserAdmin):
     inlines = (PerfilInline, )
 
+
 admin.site.unregister(User)
 admin.site.register(User, UsuarioAdmin)
-#admin.site.register(Sede)
+# admin.site.register(Sede)

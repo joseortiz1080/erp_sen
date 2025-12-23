@@ -100,8 +100,9 @@ class EstudianteForm(forms.ModelForm):
 
 
 class ContratoForm(forms.ModelForm):
+    # Ahora hasta 24 cuotas
     numero_cuotas = forms.TypedChoiceField(
-        choices=[(i, str(i)) for i in range(1, 13)],
+        choices=[(i, str(i)) for i in range(1, 25)],
         coerce=int,
         empty_value=None,
         widget=forms.Select(attrs={"class": "form-select"})
@@ -111,9 +112,8 @@ class ContratoForm(forms.ModelForm):
         model = Contrato
         fields = ['fecha_inicio', 'fecha_fin', 'valor_total', 'valor_cuota_pactada', 'numero_cuotas', 'estado']
         widgets = {
-            "fecha_inicio": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
-            "fecha_fin": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
-            # 🔹 CAMBIO: TextInput para permitir puntos/miles y comas
+            "fecha_inicio": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),
+            "fecha_fin": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),  # se calcula
             "valor_total": forms.TextInput(attrs={
                 "class": "form-control text-end",
                 "inputmode": "numeric",
@@ -124,75 +124,52 @@ class ContratoForm(forms.ModelForm):
                 "step": "0.01",
                 "readonly": "readonly"
             }),
-            "estado": forms.Select(attrs={"class": "form-select"}),
+            "estado": forms.HiddenInput(),  # oculto; lo forzamos a "Activo"
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Requeridos
         for f in ["fecha_inicio", "valor_total", "numero_cuotas", "estado"]:
             if f in self.fields:
                 self.fields[f].required = True
                 self.fields[f].error_messages["required"] = "Este campo es obligatorio."
-        # Solo lectura a nivel de form (defensa extra)
+        if "fecha_fin" in self.fields:
+            self.fields["fecha_fin"].required = False
         if "valor_cuota_pactada" in self.fields:
             self.fields["valor_cuota_pactada"].required = False
-            self.fields["valor_cuota_pactada"].disabled = False  # se envía, el widget es readonly
+            self.fields["valor_cuota_pactada"].disabled = False
+        # Estado por defecto
+        if "estado" in self.fields:
+            self.fields["estado"].initial = "Activo"
 
     def clean_valor_total(self):
-        """
-        Acepta valores con separadores de miles y decimales:
-        - '12000000'
-        - '12,000,000.50'
-        - '12.000.000,50'
-        - '$ 12.000.000'
-        """
         raw = self.cleaned_data.get("valor_total")
         if raw is None:
             raise ValidationError("El valor total es obligatorio.")
         s = str(raw).strip()
         if not s:
             raise ValidationError("El valor total es obligatorio.")
-
-        # Quitar símbolos comunes y espacios
         s = s.replace("$", "").replace(" ", "")
-
-        # Normalizar separadores:
-        # Si hay coma y punto, tomamos el último como separador decimal
         try:
             if "," in s and "." in s:
                 if s.rfind(",") > s.rfind("."):
-                    # coma decimal → quitar puntos, cambiar coma por punto
-                    s = s.replace(".", "")
-                    s = s.replace(",", ".")
+                    s = s.replace(".", "").replace(",", ".")
                 else:
-                    # punto decimal → quitar comas
                     s = s.replace(",", "")
             elif "," in s:
-                # solo comas → asumir coma decimal (quitar puntos por si acaso)
-                s = s.replace(".", "")
-                s = s.replace(",", ".")
-            else:
-                # solo puntos o solo dígitos → ya sirve
-                pass
-
+                s = s.replace(".", "").replace(",", ".")
             value = Decimal(s)
         except (InvalidOperation, ValueError):
             raise ValidationError("Formato de número inválido. Ej: 12.000.000,00")
-
         if value <= 0:
             raise ValidationError("El valor total debe ser mayor a cero.")
         return value
 
-    # Nota: mantengo tus dos clean() existentes como los tenías
-    def clean(self):
-        cleaned = super().clean()
-        total = cleaned.get("valor_total")
-        n = cleaned.get("numero_cuotas")
-        if total and n:
-            cuota = (Decimal(total) / Decimal(n)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            cleaned["valor_cuota_pactada"] = cuota
-        return cleaned
+    def clean_fecha_inicio(self):
+        d = self.cleaned_data.get('fecha_inicio')
+        if d and d.day not in (5, 20):
+            raise ValidationError('La fecha de inicio debe ser el día 5 o 20 del mes.')
+        return d
 
     def clean(self):
         cleaned = super().clean()
@@ -200,6 +177,16 @@ class ContratoForm(forms.ModelForm):
         ff = cleaned.get("fecha_fin")
         if fi and ff and ff < fi:
             self.add_error("fecha_fin", "La fecha fin no puede ser anterior a la fecha de inicio.")
+        total = cleaned.get("valor_total")
+        n = cleaned.get("numero_cuotas")
+        if total is not None and n:
+            try:
+                cuota = (Decimal(total) / Decimal(n)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                cleaned["valor_cuota_pactada"] = cuota
+            except Exception:
+                self.add_error("valor_total", "No fue posible calcular el valor de la cuota.")
+        # Forzar estado Activo
+        cleaned["estado"] = "Activo"
         return cleaned
 
 from django import forms
@@ -209,7 +196,7 @@ class IngresoForm(forms.ModelForm):
     class Meta:
         model = Ingreso
         fields = ['fecha_pago', 'tipo_ingreso', 'valor_pagado', 'forma_pago',
-                  'observacion', 'referencia', 'numero_factura', 'sede']
+                'observacion', 'referencia', 'numero_factura', 'sede']
         labels = {
             'fecha_pago': 'Fecha',
             'tipo_ingreso': 'Concepto',

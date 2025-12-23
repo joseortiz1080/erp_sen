@@ -4,9 +4,10 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import (
-    Sum, F, DecimalField, Value, Q, Exists, OuterRef, Subquery,
+    Sum, F, DecimalField, Value, Q, Exists, OuterRef, Subquery,IntegerField,Count,
     BooleanField, Case, When
 )
+from django.db import models
 from django.db.models.functions import Coalesce
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
@@ -19,11 +20,33 @@ from django.contrib import messages
 from .forms import IngresoForm
 
 
+from decimal import Decimal,ROUND_HALF_UP
+
+# ============================
+# (B) Helper unificado de sede
+# ============================
+def user_sede_ids(user):
+    """
+    Devuelve el conjunto de IDs de sede a los que el usuario tiene acceso.
+    - Soporta un posible atributo legacy `user.sede_id`.
+    - Si existe Perfil con ManyToMany `sedes`, usa ese universo.
+    - Si no hay restricción, retorna set() (sin filtro por sede).
+    """
+    sid = getattr(user, 'sede_id', None)
+    if sid:
+        return {sid}
+    perfil = getattr(user, 'perfil', None)
+    if perfil:
+        return set(perfil.sedes.values_list('id', flat=True))
+    return set()
+
+
 @require_POST
 @login_required
 def logout_view(request):
-    logout(request)               # limpia completamente la sesión
-    return redirect('login')      # <— ÚNICO CAMBIO: coincide con name='login' en urls.py
+    logout(request)
+    return redirect('login')
+
 
 @login_required
 def vista_inicial(request):
@@ -47,13 +70,110 @@ def dashboard_view(request):
     return render(request, 'dashboard.html')
 
 
+from django.db.models import Count, IntegerField, DecimalField, Value, F, Sum, OuterRef, Subquery
+from django.db.models.functions import Coalesce
+from decimal import Decimal
+from django.utils.timezone import now
+
 @login_required
 def listar_estudiantes(request):
+    contrato_valor_sq = Subquery(
+        Contrato.objects
+        .filter(estudiante_id=OuterRef('pk'))
+        .order_by('-id')
+        .values('valor_total')[:1],
+        output_field=DecimalField(max_digits=12, decimal_places=2)
+    )
+
+    numero_cuotas_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'))
+        .values('contrato__estudiante_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField()
+    )
+
+    cuotas_pagadas_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Pagada')
+        .values('contrato__estudiante_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField()
+    )
+
+    cuotas_vencidas_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Vencida')
+        .values('contrato__estudiante_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField()
+    )
+
+    total_pagado_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'))
+        .values('contrato__estudiante_id')
+        .annotate(total=Coalesce(Sum('valor_pagado'), Value(Decimal('0.00'))))
+        .values('total')[:1],
+        output_field=DecimalField(max_digits=12, decimal_places=2)
+    )
+
+    saldo_total_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'))
+        .values('contrato__estudiante_id')
+        .annotate(saldo=Coalesce(Sum(F('valor') - F('valor_pagado')),
+                                Value(Decimal('0.00'))))
+        .values('saldo')[:1],
+        output_field=DecimalField(max_digits=12, decimal_places=2)
+    )
+
+    cuotas_parciales_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Parcial')
+        .values('contrato__estudiante_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField()
+    )
+
+    proximo_vto_sq = Subquery(
+        Cuota.objects
+        .filter(contrato__estudiante_id=OuterRef('pk'), valor__gt=F('valor_pagado'))
+        .order_by('fecha_vencimiento')
+        .values('fecha_vencimiento')[:1]
+    )
+
     estudiantes = (
         Estudiante.objects
         .select_related('nivel', 'sede', 'acudiente', 'horario')
-        .order_by('id')  # Orden ascendente por ID
+        .annotate(
+            # ya definidos:
+            contrato_valor=Coalesce(contrato_valor_sq, Value(Decimal('0.00'))),
+            numero_cuotas=Coalesce(numero_cuotas_sq, Value(0)),
+            cuotas_pagadas=Coalesce(cuotas_pagadas_sq, Value(0)),
+            cuotas_vencidas=Coalesce(cuotas_vencidas_sq, Value(0)),
+            total_pagado=Coalesce(total_pagado_sq, Value(Decimal('0.00'))),
+            saldo_total=Coalesce(saldo_total_sq, Value(Decimal('0.00'))),
+
+            # NUEVO:
+            cuotas_parciales=Coalesce(cuotas_parciales_sq, Value(0)),
+
+            proximo_vto=proximo_vto_sq,
+            
+            estado_cartera=Case(
+            When(cuotas_vencidas__gt=0, then=Value('En mora')),
+            default=Value('Al día'),
+            output_field=models.CharField()
+),
+        )
+        
+        .order_by('-id')
     )
+
     return render(request, 'listar_estudiantes.html', {'estudiantes': estudiantes})
 
 
@@ -81,10 +201,10 @@ def listado_cxc(request):
     - Filtros: q, estado, nivel, horario, fv_desde/fv_hasta, medio, factura, referencia, con_pago, sede.
     - Anota: total pagado por cuota, último pago (fecha/medio/factura/obs/referencia), SALDO y es_vencida_roja.
     """
-    sede_usuario_id = getattr(request.user, 'sede_id', None)
     hoy = now().date()
+    sede_ids = user_sede_ids(request.user)
 
-    # --------- Subqueries: último pago por cuota ---------
+    # --------- Subqueries: último pago por cuota (legacy) ---------
     pagos_ordenados = Pago.objects.filter(cuota_id=OuterRef('pk')).order_by('-fecha_pago', '-id')
     ultimo_pago_fecha      = Subquery(pagos_ordenados.values('fecha_pago')[:1])
     ultimo_pago_medio      = Subquery(pagos_ordenados.values('forma_pago')[:1])
@@ -112,7 +232,7 @@ def listado_cxc(request):
             ultimo_pago_medio=ultimo_pago_medio,
             ultimo_pago_obs=ultimo_pago_obs,
             ultimo_pago_factura=ultimo_pago_factura,
-            ultimo_pago_referencia=ultimo_pago_referencia,  # NUEVO
+            ultimo_pago_referencia=ultimo_pago_referencia,
         )
         .annotate(saldo=F('valor') - F('pagado'))
         .annotate(
@@ -122,14 +242,12 @@ def listado_cxc(request):
                 output_field=BooleanField()
             )
         )
-        # ID de la cuota primero (desc) para que las más recientes queden arriba
         .order_by('-id', 'contrato__estudiante__id', 'fecha_vencimiento', 'numero')
-
     )
 
-    # --------- Seguridad por sede ---------
-    if sede_usuario_id:  # usuario atado a sede
-        qs = qs.filter(contrato__estudiante__sede_id=sede_usuario_id)
+    # --------- Seguridad por sede (B) ---------
+    if sede_ids:
+        qs = qs.filter(contrato__estudiante__sede_id__in=sede_ids)
 
     # --------- Parámetros de filtro ---------
     q_text     = (request.GET.get('q') or '').strip()
@@ -140,9 +258,9 @@ def listado_cxc(request):
     fv_hasta   = (request.GET.get('fv_hasta') or '').strip()
     medio      = (request.GET.get('medio') or '').strip()           # Banco/Nequi/Transferencia/Efectivo/Otro
     factura    = (request.GET.get('factura') or '').strip()
-    referencia = (request.GET.get('referencia') or '').strip()      # <-- NUEVO parámetro
-    con_pago   = (request.GET.get('con_pago') or '').strip()        # 'si' / 'no'
-    sede_id    = (request.GET.get('sede') or '').strip() if not sede_usuario_id else ''  # solo globales
+    referencia = (request.GET.get('referencia') or '').strip()
+    # Si el usuario NO está restringido por sede_ids, se permite filtrar por sede desde GET
+    sede_id    = (request.GET.get('sede') or '').strip() if not sede_ids else ''
 
     # Texto libre (incluye referencia)
     if q_text:
@@ -152,11 +270,13 @@ def listado_cxc(request):
             Q(contrato__estudiante__acudiente__documento__icontains=q_text) |
             Q(contrato__estudiante__acudiente__nombre_completo__icontains=q_text) |
             Q(pagos__numero_factura__icontains=q_text) |
-            Q(pagos__referencia__icontains=q_text)  # NUEVO
+            Q(pagos__referencia__icontains=q_text)
         )
+        # (C) mejorar manejo cuando q es numérico (posible contrato_id)
         if q_text.isdigit():
-            filtros |= Q(contrato_id=int(q_text))
-        qs = qs.filter(filtros).distinct()
+            qs = qs.filter(Q(contrato_id=int(q_text)) | filtros).distinct()
+        else:
+            qs = qs.filter(filtros).distinct()
 
     # Estado de la cuota
     if estado:
@@ -192,19 +312,20 @@ def listado_cxc(request):
         )).filter(tiene_referencia=True)
 
     # Con pago / sin pago
-    if con_pago == 'si':
+    if (request.GET.get('con_pago') or '').strip() == 'si':
         qs = qs.filter(pagado__gt=0)
-    elif con_pago == 'no':
+    elif (request.GET.get('con_pago') or '').strip() == 'no':
         qs = qs.filter(pagado__lte=0)
 
-    # Sede
+    # Filtro por sede desde GET solo si NO hay restricción previa
     if sede_id:
         qs = qs.filter(contrato__estudiante__sede_id=sede_id)
 
     # --------- Catálogos ---------
     niveles  = Nivel.objects.all().order_by('nombre')
     horarios = Horario.objects.all().order_by('descripcion')
-    sedes    = Sede.objects.all().order_by('nombre') if not sede_usuario_id else []
+    # Si el usuario ya está restringido por sede_ids, no mostramos selector global de sedes
+    sedes    = [] if sede_ids else list(Sede.objects.all().order_by('nombre'))
 
     ESTADOS = ['Pendiente', 'Parcial', 'Vencida', 'Pagada']
     MEDIOS  = ['Banco', 'Nequi', 'Transferencia', 'Efectivo', 'Otro']
@@ -227,7 +348,8 @@ def listado_cxc(request):
         # filtros activos
         'q': q_text, 'estado': estado, 'nivel_id': nivel_id, 'horario_id': horario_id,
         'fv_desde': fv_desde, 'fv_hasta': fv_hasta, 'medio': medio,
-        'factura': factura, 'referencia': referencia, 'con_pago': con_pago, 'sede_id': sede_id,
+        'factura': factura, 'referencia': referencia, 'con_pago': (request.GET.get('con_pago') or '').strip(),
+        'sede_id': sede_id,
         'per_page': per_page,
 
         # catálogos
@@ -237,7 +359,7 @@ def listado_cxc(request):
         'ESTADOS': ESTADOS,
         'MEDIOS': MEDIOS,
 
-        'hoy': hoy,  # para comparaciones en template si lo necesitas
+        'hoy': hoy,
     }
     return render(request, 'listado_cxc.html', context)
 
@@ -252,14 +374,14 @@ def aplicar_pago(request):
     """
     from django.utils.dateparse import parse_date  # import local
 
-    # --- Helper de seguridad/sede ---
+    # --- Helper de seguridad/sede (B) ---
     def obtener_cuota_segura(cuota_id_str):
         cuota = get_object_or_404(
             Cuota.objects.select_related('contrato', 'contrato__estudiante__sede'),
             pk=cuota_id_str
         )
-        sede_usuario_id = getattr(request.user, 'sede_id', None)
-        if sede_usuario_id and cuota.contrato.estudiante.sede_id != sede_usuario_id:
+        sede_ids = user_sede_ids(request.user)
+        if sede_ids and cuota.contrato.estudiante.sede_id not in sede_ids:
             return None, JsonResponse({'ok': False, 'error': 'No tiene permisos sobre esta sede.'}, status=403)
         return cuota, None
 
@@ -375,8 +497,7 @@ def aplicar_pago(request):
     if valor <= 0:
         return JsonResponse({'ok': False, 'error': 'El valor debe ser mayor a cero.'}, status=400)
 
-    # Fecha
-    from django.utils.dateparse import parse_date  # import local
+    from django.utils.dateparse import parse_date
     fecha_pago = parse_date(fecha_str) if fecha_str else None
     if not fecha_pago:
         fecha_pago = now().date()
@@ -437,7 +558,7 @@ def aplicar_pago(request):
                     ],
                 }, status=400)
 
-        # Helper: crear pago y actualizar cuota
+        # Helper: crear pago y actualizar cuota (legacy)
         def aplicar_a_cuota(c: Cuota, monto: Decimal) -> Decimal:
             if monto <= 0:
                 return Decimal('0.00')
@@ -516,8 +637,8 @@ def eliminar_pago(request):
         pago.delete()
         return JsonResponse({'ok': True})
 
-    sede_usuario_id = getattr(request.user, 'sede_id', None)
-    if sede_usuario_id and pago.cuota.contrato.estudiante.sede_id != sede_usuario_id:
+    sede_ids = user_sede_ids(request.user)
+    if sede_ids and pago.cuota.contrato.estudiante.sede_id not in sede_ids:
         return JsonResponse({'ok': False, 'error': 'No tiene permisos sobre esta sede.'}, status=403)
 
     with transaction.atomic():
@@ -554,9 +675,12 @@ def eliminar_pago(request):
 @login_required
 @transaction.atomic
 def nuevo_contrato(request):
-    # imports locales para que puedas pegar solo esta función
+    # imports locales para pegar solo esta función
     from django.utils.dateparse import parse_date
     from django.db import IntegrityError
+    from calendar import monthrange
+    from datetime import date
+    from decimal import Decimal, ROUND_HALF_UP
 
     # Helper: lee primero con prefijo y, si no existe, sin prefijo
     def _p(key_pref, key_plain, default=None):
@@ -565,10 +689,34 @@ def nuevo_contrato(request):
             val = request.POST.get(key_plain, default)
         return val
 
+    # Helper: sumar meses manteniendo “día de corte” y corrigiendo si el mes no lo tiene
+    def add_months(d: date, months: int) -> date:
+        y = d.year + (d.month - 1 + months) // 12
+        m = (d.month - 1 + months) % 12 + 1
+        last_day = monthrange(y, m)[1]
+        return date(y, m, min(d.day, last_day))
+
+    # Helper: fecha de inicio = mes siguiente con día 5 o 20
+    def compute_fecha_inicio_from_corte(corte: int) -> date:
+        today = date.today()
+        # ir al primer día del mes siguiente
+        y = today.year + (today.month // 12)
+        m = (today.month % 12) + 1
+        last_day = monthrange(y, m)[1]
+        dia = min(corte, last_day)  # por seguridad, aunque 5 y 20 siempre existen
+        return date(y, m, dia)
+
     if request.method == 'POST':
         # Formularios alineados con tu HTML (usa prefijos)
         estudiante_form = EstudianteForm(request.POST, prefix='estudiante')
-        contrato_form  = ContratoForm(request.POST)
+
+        # =========================
+        # CONTRATO: forzar estado=Activo aunque no venga del form
+        # =========================
+        post_contrato = request.POST.copy()
+        if not post_contrato.get('estado'):
+            post_contrato['estado'] = 'Activo'
+        contrato_form = ContratoForm(post_contrato)
 
         # ---------------------
         # ACUDIENTE (reuso por documento)
@@ -577,32 +725,30 @@ def nuevo_contrato(request):
         acudiente = None
 
         if doc_acu:
-            # Si existe, se reutiliza y no bloquea por email ni unicidad
             acudiente = Acudiente.objects.filter(documento=doc_acu).first()
 
         if acudiente:
-            # Solo para re-render sin validación (evita “already exists”)
             acudiente_form = AcudienteForm(prefix='acudiente')
         else:
-            # No existe → se crea (email ya no es unique)
             acudiente_form = AcudienteForm(request.POST, prefix='acudiente')
             if acudiente_form.is_valid():
                 acudiente = acudiente_form.save()
             else:
+                # si acudiente falla, no hay nada que “revertir” porque no guardamos estudiante/contrato aún
                 return render(request, 'nuevo_contrato.html', {
                     'form_acudiente': acudiente_form,
                     'form_estudiante': EstudianteForm(request.POST, prefix='estudiante'),
                     'form_contrato':  contrato_form,
                 })
+
         # ---------------------
-        # ESTUDIANTE (garantizado)
+        # ESTUDIANTE
         # ---------------------
         if estudiante_form.is_valid():
             estudiante = estudiante_form.save(commit=False)
             estudiante.acudiente = acudiente
             estudiante.save()
         else:
-            # Fallback directo a BD si el ModelForm no valida
             try:
                 nombre     = _p('estudiante-nombre_completo', 'nombre_completo', '')
                 tipo_doc   = _p('estudiante-tipo_documento', 'tipo_documento', 'CC')
@@ -613,6 +759,7 @@ def nuevo_contrato(request):
                 estado     = _p('estudiante-estado', 'estado', 'Activo')
                 observ     = _p('estudiante-observacion', 'observacion', '')
                 horario_id = _p('estudiante-horario', 'horario')
+
                 estudiante, _ = Estudiante.objects.get_or_create(
                     documento=documento,
                     defaults={
@@ -627,10 +774,11 @@ def nuevo_contrato(request):
                         'acudiente': acudiente,
                     }
                 )
-                # Garantiza asociación correcta al acudiente reutilizado/creado
+
                 if estudiante.acudiente_id != acudiente.id:
                     estudiante.acudiente = acudiente
                     estudiante.save(update_fields=['acudiente'])
+
             except IntegrityError as e:
                 estudiante_form.add_error(None, f'No se pudo crear el estudiante (integridad): {e}')
                 return render(request, 'nuevo_contrato.html', {
@@ -645,48 +793,73 @@ def nuevo_contrato(request):
                     'form_estudiante': estudiante_form,
                     'form_contrato': contrato_form,
                 })
+
         # ---------------------
         # CONTRATO
         # ---------------------
         # Evita segundo contrato para el mismo estudiante
         if Contrato.objects.filter(estudiante=estudiante).exists():
             contrato_form.add_error(None, 'Este estudiante ya tiene un contrato registrado.')
+            transaction.set_rollback(True)  # ✅ evita dejar estudiante sin contrato
             return render(request, 'nuevo_contrato.html', {
                 'form_acudiente': acudiente_form,
                 'form_estudiante': estudiante_form,
                 'form_contrato': contrato_form,
             })
 
+        # Validación del form del contrato (normaliza valor_total y calcula cuota pactada)
         if contrato_form.is_valid():
             contrato = contrato_form.save(commit=False)
             contrato.acudiente = acudiente
             contrato.estudiante = estudiante
 
-            # Cálculo robusto en servidor (cuota con 2 decimales redondeada)
-            valor_por_cuota = (
-                Decimal(contrato.valor_total) / Decimal(contrato.numero_cuotas)
-            ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            contrato.valor_cuota_pactada = valor_por_cuota
+            # -------- Día de corte (POST plano desde el <select name="dia_corte">) --------
+            try:
+                dia_corte = int((request.POST.get('dia_corte') or '5').strip())
+            except ValueError:
+                dia_corte = 5
+            if dia_corte not in (5, 20):
+                dia_corte = 5  # fallback defensivo
+
+            # -------- Calcular fecha_inicio (mes siguiente) según 5/20. Ignora lo que venga en el form --------
+            fecha_inicio = compute_fecha_inicio_from_corte(dia_corte)
+
+            # -------- Cálculo robusto de cuota pactada y residuo (para cuadrar total) --------
+            total = Decimal(contrato.valor_total)
+            n     = int(contrato.numero_cuotas)
+            valor_base = (total / Decimal(n)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            residuo    = (total - (valor_base * n)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            contrato.valor_cuota_pactada = valor_base
+            contrato.estado = 'Activo'          # ✅ blindaje definitivo
+            contrato.fecha_inicio = fecha_inicio
+            contrato.fecha_fin = add_months(fecha_inicio, n - 1)
 
             contrato.save()
 
-            # Crear cuotas con ese valor
-            for i in range(1, contrato.numero_cuotas + 1):
+            # -------- Generar cuotas mensuales con día de corte (+ residuo en la última) --------
+            for i in range(1, n + 1):
+                vence = add_months(fecha_inicio, i - 1)
+                valor_i = valor_base
+                if i == n and residuo != Decimal('0.00'):
+                    valor_i = (valor_base + residuo).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
                 Cuota.objects.create(
                     contrato=contrato,
                     numero=i,
-                    fecha_vencimiento=contrato.fecha_inicio,
-                    valor=valor_por_cuota
+                    fecha_vencimiento=vence,
+                    valor=valor_i
                 )
+
             return redirect('listar_estudiantes')
 
-        # Si el contrato no valida, se devuelven errores
+        # ❌ Si el contrato no valida, rollback para no dejar estudiante huérfano
+        transaction.set_rollback(True)
         return render(request, 'nuevo_contrato.html', {
             'form_acudiente': acudiente_form,
             'form_estudiante': estudiante_form,
             'form_contrato': contrato_form,
         })
-
 
     # GET → formularios vacíos con los mismos prefijos que usa el HTML
     return render(request, 'nuevo_contrato.html', {
@@ -694,7 +867,7 @@ def nuevo_contrato(request):
         'form_estudiante': EstudianteForm(prefix='estudiante'),
         'form_contrato': ContratoForm(),
     })
-
+    
 @require_GET
 def buscar_acudiente_por_documento(request):
     if not request.user.is_authenticated:
@@ -704,7 +877,7 @@ def buscar_acudiente_por_documento(request):
     if not documento_raw or not documento_raw.strip():
         return JsonResponse({"existe": False, "error": "Documento inválido"}, status=400)
 
-    documento = documento_raw.strip()  # 🔹 Mantener alfanumérico
+    documento = documento_raw.strip()
 
     try:
         acudiente = Acudiente.objects.get(documento=documento)
@@ -719,6 +892,7 @@ def buscar_acudiente_por_documento(request):
         data = {"existe": False}
 
     return JsonResponse(data)
+
 
 @login_required
 def nuevo_ingreso(request):
@@ -753,26 +927,23 @@ def nuevo_ingreso(request):
     else:
         form = IngresoForm(user=request.user)
 
-# --------- Listado de ingresos ---------
-        if ES_CLEVEL:
-            ingresos = (
-                Ingreso.objects
-                .filter(tipo_registro='otro_ingreso')
-                .select_related('sede', 'usuario_registro')
-                .order_by('-id')
-            )
-        else:
-            ingresos = (
-                Ingreso.objects
-                .filter(usuario_registro=request.user, tipo_registro='otro_ingreso')
-                .select_related('sede', 'usuario_registro')
-                .order_by('-id')
-            )
-
+    # --------- Listado de ingresos ---------
+    if ES_CLEVEL:
+        ingresos = (
+            Ingreso.objects
+            .filter(tipo_registro='otro_ingreso')
+            .select_related('sede', 'usuario_registro')
+            .order_by('-id')
+        )
+    else:
+        ingresos = (
+            Ingreso.objects
+            .filter(usuario_registro=request.user, tipo_registro='otro_ingreso')
+            .select_related('sede', 'usuario_registro')
+            .order_by('-id')
+        )
 
     return render(request, 'nuevo_ingreso.html', {
         'form': form,
         'ingresos': ingresos,
     })
-
-
