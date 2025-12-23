@@ -2,13 +2,18 @@
 from django.db import models
 from decimal import Decimal
 from django.contrib.auth.models import User
-#from .models import Sede 
+# from .models import Sede
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+
 
 class Horario(models.Model):
     hora = models.TimeField(unique=True)  # Ejemplo: 08:00:00
     descripcion = models.CharField(max_length=50, help_text='Ej: 8:00 am, 2:00 pm')
+
+    class Meta:
+        db_table = 'gestion_clientes_horario'
+        managed = False
 
     def __str__(self):
         return self.descripcion
@@ -18,6 +23,10 @@ class Sede(models.Model):
     nombre = models.CharField(max_length=100)
     ciudad = models.CharField(max_length=100)
     direccion = models.TextField()
+
+    class Meta:
+        db_table = 'gestion_clientes_sede'
+        managed = False
 
     def __str__(self):
         return f"{self.nombre} - {self.ciudad}"
@@ -37,6 +46,10 @@ class Acudiente(models.Model):
     telefono = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True, db_index=True)
 
+    class Meta:
+        db_table = 'gestion_clientes_acudiente'
+        managed = False
+
     def __str__(self):
         return self.nombre_completo
 
@@ -45,6 +58,10 @@ class Nivel(models.Model):
     codigo = models.CharField(max_length=10, unique=True)  # Ej: A1, B2, Kids
     nombre = models.CharField(max_length=50)               # Ej: Básico A1
     descripcion = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'gestion_clientes_nivel'
+        managed = False
 
     def __str__(self):
         return f"{self.codigo} - {self.nombre}"
@@ -74,54 +91,49 @@ class Estudiante(models.Model):
     acudiente = models.ForeignKey(Acudiente, on_delete=models.PROTECT)
     sede = models.ForeignKey(Sede, on_delete=models.PROTECT)
 
-    
     estado = models.CharField(max_length=10, choices=ESTADOS, default='Activo')
     observacion = models.TextField(blank=True, null=True)
     horario = models.ForeignKey(Horario, on_delete=models.PROTECT, null=True, blank=True)
+
+    class Meta:
+        db_table = 'gestion_clientes_estudiante'
+        managed = False
 
     def __str__(self):
         return f"{self.nombre_completo} ({self.tipo_documento} {self.documento})" if self.documento else self.nombre_completo
 
 
 class Contrato(models.Model):
-    estudiante = models.ForeignKey(Estudiante, on_delete=models.CASCADE)
-    acudiente = models.ForeignKey(Acudiente, on_delete=models.CASCADE)
+    ESTADOS = (
+        ('Activo', 'Activo'),
+        ('Finalizado', 'Finalizado'),
+        ('Anulado', 'Anulado'),
+    )
+
+    acudiente = models.ForeignKey('Acudiente', on_delete=models.PROTECT, related_name='contratos')
+    estudiante = models.ForeignKey('Estudiante', on_delete=models.PROTECT, related_name='contratos')
+
+    # Fechas: la app las calcula; fecha_fin puede quedar nula mientras se arma el contrato
     fecha_inicio = models.DateField()
     fecha_fin = models.DateField(null=True, blank=True)
-    valor_total = models.DecimalField(max_digits=10, decimal_places=2)
-    valor_cuota_pactada = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    numero_cuotas = models.IntegerField(default=1)
-    estado = models.CharField(max_length=20, choices=[
-        ('Activo', 'Activo'), ('Finalizado', 'Finalizado')
-    ])
 
-    # === Métodos existentes (compatibilidad) ===
-    def calcular_total_pagado(self):
-        # Mantiene compatibilidad con el esquema previo (suma de Pago.valor_pagado cuando se usaba 1 pago->1 cuota).
-        return sum(p.valor_pagado for p in self.pago_set.all())
+    # Valores
+    valor_total = models.DecimalField(max_digits=12, decimal_places=2)
+    valor_cuota_pactada = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
 
-    def calcular_saldo(self):
-        return self.valor_total - self.calcular_total_pagado()
+    # Cuotas
+    numero_cuotas = models.PositiveSmallIntegerField()
 
-    @property
-    def en_incumplimiento(self):
-        return self.cuota_set.filter(estado='Vencida').exists()
+    # Estado del contrato: SIEMPRE arranca en Activo (forzado también en views.py)
+    estado = models.CharField(max_length=20, choices=ESTADOS, default='Activo')
 
-    # === Nuevos métodos recomendados (vía aplicaciones) ===
-    def total_aplicado_via_pagos(self):
-        """
-        Suma de todas las aplicaciones (PagoAplicacion.monto) hechas a las cuotas de este contrato.
-        Fuente de verdad recomendada para reportes.
-        """
-        from django.db.models import Sum
-        return (self.cuota_set
-                .aggregate(total=models.Sum('aplicaciones__monto'))['total']) or Decimal('0')
-
-    def saldo_via_aplicaciones(self):
-        return (self.valor_total or Decimal('0')) - self.total_aplicado_via_pagos()
+    class Meta:
+        db_table = 'gestion_clientes_contrato'
+        managed = False
+        ordering = ['-id']
 
     def __str__(self):
-        return f"Contrato #{self.id} de {self.estudiante} - {self.estado}"
+        return f'Contrato #{self.id} — {self.estudiante.nombre_completo}'
 
 
 class Cuota(models.Model):
@@ -129,16 +141,24 @@ class Cuota(models.Model):
     numero = models.IntegerField()  # Ej: cuota 1, 2, ...
     fecha_vencimiento = models.DateField()
     valor = models.DecimalField(max_digits=10, decimal_places=2)
+
     # Campo legacy (cache) — se recomienda reemplazar por sumatoria de aplicaciones:
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    estado = models.CharField(max_length=20, choices=[
-        ('Pendiente', 'Pendiente'),
-        ('Pagada', 'Pagada'),
-        ('Vencida', 'Vencida'),
-        ('Parcial', 'Parcial'),
-    ], default='Pendiente')
+
+    estado = models.CharField(
+        max_length=20,
+        choices=[
+            ('Pendiente', 'Pendiente'),
+            ('Pagada', 'Pagada'),
+            ('Vencida', 'Vencida'),
+            ('Parcial', 'Parcial'),
+        ],
+        default='Pendiente'
+    )
 
     class Meta:
+        db_table = 'gestion_clientes_cuota'
+        managed = False
         unique_together = (('contrato', 'numero'),)
         ordering = ['fecha_vencimiento', 'numero']
         indexes = [
@@ -193,6 +213,8 @@ class Pago(models.Model):
     numero_factura = models.CharField(max_length=30, blank=True, null=True, db_index=True)
 
     class Meta:
+        db_table = 'gestion_clientes_pago'
+        managed = False
         indexes = [
             models.Index(fields=['fecha_pago']),
             models.Index(fields=['numero_factura']),
@@ -222,6 +244,8 @@ class PagoAplicacion(models.Model):
     monto = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
+        db_table = 'gestion_clientes_pagoaplicacion'
+        managed = False
         # Un mismo pago no debe tener más de una fila aplicando a la MISMA cuota.
         unique_together = (('pago', 'cuota'),)
         indexes = [
@@ -243,6 +267,7 @@ class PagoAplicacion(models.Model):
     def __str__(self):
         return f"Pago #{self.pago_id} → Cuota #{self.cuota_id}: ${self.monto}"
 
+
 class Ingreso(models.Model):
     TIPOS_REGISTRO = [
         ('otro_ingreso', 'Otro ingreso'),
@@ -252,8 +277,8 @@ class Ingreso(models.Model):
     id = models.BigAutoField(primary_key=True)
     sede = models.ForeignKey('gestion_clientes.Sede', on_delete=models.PROTECT, db_column='sede_id')
     tipo_ingreso = models.CharField(max_length=50)
-    valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)   # 👈 cambiado
-    fecha_pago = models.DateField()                                       # 👈 cambiado
+    valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
+    fecha_pago = models.DateField()
     forma_pago = models.CharField(max_length=50)
     referencia = models.CharField(max_length=100, null=True, blank=True)
     observacion = models.TextField(null=True, blank=True)
@@ -291,11 +316,19 @@ class Ingreso(models.Model):
     def __str__(self):
         return f"{self.tipo_ingreso} - {self.valor_pagado} ({self.fecha_pago})"
 
-
-
 class Perfil(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    sedes = models.ManyToManyField(Sede, blank=True)  # 👈 varias sedes disponibles
+
+    sedes = models.ManyToManyField(
+        Sede,
+        blank=True,
+        related_name="perfiles",                 # evita choques de reverse accessor
+        db_table="gestion_clientes_perfil_sedes" # usa tu tabla real
+    )
+
+    class Meta:
+        db_table = "gestion_clientes_perfil"
+        managed = False
 
     def __str__(self):
         return self.user.username

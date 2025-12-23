@@ -1,51 +1,244 @@
 {% extends 'base.html' %}
+{% load static %}
+{% load filtros_monetarios %}
 
-{% block title %}Listado de Estudiantes{% endblock %}
+{% block title %}Cuentas por Cobrar — Estudiantes{% endblock %}
 
 {% block content %}
-<h2 class="mb-4">Listado de Estudiantes</h2>
+<h2 class="mb-3">Cuentas por Cobrar — Estudiantes</h2>
 
+<!-- =========================
+     Barra de filtros mínima
+     ========================= -->
+<form method="get" class="row g-3 align-items-end mb-4">
+
+  <!-- Buscar -->
+  <div class="col-12 col-md-6 col-lg-4">
+    <label class="form-label">Buscar</label>
+    <input
+      type="text"
+      name="q"
+      value="{{ q }}"
+      class="form-control"
+      placeholder="Estudiante, acudiente o # contrato"
+    >
+  </div>
+
+  <!-- Nivel -->
+  <div class="col-6 col-md-3 col-lg-2">
+    <label class="form-label">Nivel</label>
+    <select name="nivel" class="form-select">
+      <option value="">(Todos)</option>
+      {% for n in niveles %}
+        <option value="{{ n.id }}"
+          {% if nivel_id|default:'' == n.id|stringformat:'s' %}selected{% endif %}>
+          {{ n.nombre }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- Horario -->
+  <div class="col-6 col-md-3 col-lg-2">
+    <label class="form-label">Horario</label>
+    <select name="horario" class="form-select">
+      <option value="">(Todos)</option>
+      {% for h in horarios %}
+        <option value="{{ h.id }}"
+          {% if horario_id|default:'' == h.id|stringformat:'s' %}selected{% endif %}>
+          {{ h.descripcion }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- Sede (solo si el usuario no está restringido) -->
+  {% if sedes %}
+  <div class="col-6 col-md-3 col-lg-2">
+    <label class="form-label">Sede</label>
+    <select name="sede" class="form-select">
+      <option value="">(Todas)</option>
+      {% for s in sedes %}
+        <option value="{{ s.id }}"
+          {% if sede_id|default:'' == s.id|stringformat:'s' %}selected{% endif %}>
+          {{ s.nombre }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
+  <!-- Por página -->
+  <div class="col-6 col-md-3 col-lg-2">
+    <label class="form-label">Por página</label>
+    <select name="per_page" class="form-select">
+      {% for n in per_page_options %}
+        <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>
+          {{ n }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- Acciones filtros -->
+  <div class="col-12 col-md-3 col-lg-2 d-flex gap-2">
+    <button type="submit" class="btn btn-primary flex-fill">
+      Filtrar
+    </button>
+    <a href="{% url 'listar_estudiantes' %}" class="btn btn-light flex-fill">
+      Limpiar
+    </a>
+  </div>
+
+</form>
+
+<!-- =========================
+     Tabla principal
+     ========================= -->
 <table class="table table-striped table-hover table-bordered align-middle">
   <thead class="table-dark">
     <tr>
       <th>ID</th>
-      <th>Nombre completo</th>
-      <th>Fecha nacimiento</th>
-      <th>Nivel</th>
+      <th>Estudiante</th>
       <th>Acudiente</th>
-      <th>Sede</th>
-      <th>Estado</th>
-      <th>Observación</th>
-      <th>Valor paquete</th>
+      <th>Nivel</th>
       <th>Horario</th>
-      <th>Acciones</th>
+      <th>Sede</th>
+      <th class="text-center">Valor contrato</th>
+      <th class="text-center"># Cuotas</th>
+      <th class="text-center">Cuotas parciales</th>
+      <th class="text-center">Cuotas pagadas</th>
+      <th class="text-center">Cuotas vencidas</th>
+      <th class="text-center">Total pagado</th>
+      <th class="text-center">Saldo por pagar</th>
+      <th class="text-center">Próximo vencimiento</th>
+      <th class="text-center">Estado cartera</th>
+      <th class="text-center">Acciones</th>
+      
     </tr>
   </thead>
+
   <tbody>
     {% for estudiante in estudiantes %}
     <tr>
       <td>{{ estudiante.id }}</td>
       <td>{{ estudiante.nombre_completo }}</td>
-      <td>{{ estudiante.fecha_nacimiento }}</td>
-      <td>{{ estudiante.nivel.nombre }}</td>
       <td>{{ estudiante.acudiente }}</td>
-      <td>{{ estudiante.sede }}</td>
-      <td>{{ estudiante.estado }}</td>
-      <td>{{ estudiante.observacion|default:"—" }}</td>
-      <td>${{ estudiante.valor_paquete_total|floatformat:0|default:"—" }}</td>
+      <td>{{ estudiante.nivel.nombre }}</td>
       <td>{{ estudiante.horario|default:"—" }}</td>
-      <td class="text-center">
-        <a href="{% url 'detalle_estudiante' estudiante.id %}" class="btn btn-sm btn-outline-primary" title="Ver detalle">
-            <i class="bi bi-search"></i> <!-- Bootstrap Icon: lupa -->
-        </a>
+      <td>{{ estudiante.sede }}</td>
+
+      <td class="text-end">
+        {{ estudiante.contrato_valor|default:0|moneda_puntos }}
       </td>
 
+      <td class="text-center">
+        {{ estudiante.numero_cuotas|default:0 }}
+      </td>
+
+      <td class="text-center">
+        {{ estudiante.cuotas_parciales|default:0 }}
+      </td>
+
+      <td class="text-center">
+        {{ estudiante.cuotas_pagadas|default:0 }}
+      </td>
+
+      <td class="text-center">
+        {{ estudiante.cuotas_vencidas|default:0 }}
+      </td>
+
+      <td class="text-end">
+        {{ estudiante.total_pagado|default:0|moneda_puntos }}
+      </td>
+
+      <td class="text-end">
+        {{ estudiante.saldo_total|default:0|moneda_puntos }}
+      </td>
+
+      <td>
+        {% if estudiante.proximo_vto %}
+          {{ estudiante.proximo_vto }}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      
+      <td class="text-center">
+      {% if estudiante.estado_cartera == 'En mora' %}
+        <span class="badge bg-danger">En mora</span>
+      {% else %}
+        <span class="badge bg-success">Al día</span>
+      {% endif %}
+      </td>
+      
+      <td class="text-center">
+        <a
+          href="{% url 'detalle_estudiante' estudiante.id %}"
+          class="btn btn-sm btn-outline-primary"
+          title="Ver detalle"
+        >
+          <i class="bi bi-search"></i>
+        </a>
+      </td>
     </tr>
     {% empty %}
     <tr>
-      <td colspan="10" class="text-center">No hay estudiantes registrados.</td>
+      <td colspan="15" class="text-center">
+        No hay estudiantes registrados.
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+
+<!-- =========================
+     Paginación
+     ========================= -->
+{% if page_obj and paginator %}
+<nav aria-label="Paginación">
+  <ul class="pagination">
+    {% if page_obj.has_previous %}
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ page_obj.previous_page_number }}&amp;per_page={{ per_page }}
+           {% if q %}&amp;q={{ q }}{% endif %}
+           {% if nivel_id %}&amp;nivel={{ nivel_id }}{% endif %}
+           {% if horario_id %}&amp;horario={{ horario_id }}{% endif %}
+           {% if sede_id %}&amp;sede={{ sede_id }}{% endif %}">
+          Anterior
+        </a>
+      </li>
+    {% else %}
+      <li class="page-item disabled">
+        <span class="page-link">Anterior</span>
+      </li>
+    {% endif %}
+
+    <li class="page-item disabled">
+      <span class="page-link">
+        Página {{ page_obj.number }} de {{ paginator.num_pages }}
+      </span>
+    </li>
+
+    {% if page_obj.has_next %}
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ page_obj.next_page_number }}&amp;per_page={{ per_page }}
+           {% if q %}&amp;q={{ q }}{% endif %}
+           {% if nivel_id %}&amp;nivel={{ nivel_id }}{% endif %}
+           {% if horario_id %}&amp;horario={{ horario_id }}{% endif %}
+           {% if sede_id %}&amp;sede={{ sede_id }}{% endif %}">
+          Siguiente
+        </a>
+      </li>
+    {% else %}
+      <li class="page-item disabled">
+        <span class="page-link">Siguiente</span>
+      </li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+
 {% endblock %}

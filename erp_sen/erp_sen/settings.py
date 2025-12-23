@@ -89,7 +89,6 @@ TEMPLATES = [
     },
 ]
 
-
 WSGI_APPLICATION = 'erp_sen.wsgi.application'
 
 
