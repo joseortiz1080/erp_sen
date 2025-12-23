@@ -1,110 +1,318 @@
 {% extends 'base.html' %}
 {% load filtros_monetarios %}
+{% load static %}
 
 {% block title %}Detalle del Estudiante{% endblock %}
 
 {% block content %}
-<h2 class="mb-4">Detalle del Estudiante</h2>
 
-<table class="table table-bordered">
-  <tr>
-    <th>ID</th>
-    <td>{{ estudiante.id }}</td>
-  </tr>
-  <tr>
-    <th>Nombre completo</th>
-    <td>{{ estudiante.nombre_completo }}</td>
-  </tr>
-  <tr>
-    <th>Fecha de nacimiento</th>
-    <td>{{ estudiante.fecha_nacimiento }}</td>
-  </tr>
-  <tr>
-    <th>Nivel</th>
-    <td>{{ estudiante.nivel.nombre }}</td>
-  </tr>
-  <tr>
-    <th>Acudiente</th>
-    <td>{{ estudiante.acudiente }}</td>
-  </tr>
-  <tr>
-    <th>Sede</th>
-    <td>{{ estudiante.sede }}</td>
-  </tr>
-  <tr>
-    <th>Horario</th>
-    <td>{{ estudiante.horario|default:"—" }}</td>
-  </tr>
-  <tr>
-    <th>Estado</th>
-    <td>{{ estudiante.estado }}</td>
-  </tr>
-  <tr>
-    <th>Valor del paquete</th>
-    <td>{{ estudiante.valor_paquete_total|moneda_puntos }}</td>
-  </tr>
-  <tr>
-    <th>Observación</th>
-    <td>{{ estudiante.observacion|default:"—" }}</td>
-  </tr>
-</table>
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="mb-0">Detalle del Estudiante</h2>
+    <div class="text-muted small">Ficha operativa y módulo de CxC</div>
+  </div>
 
-<a href="{% url 'listar_estudiantes' %}" class="btn btn-secondary mt-3">← Volver al listado</a>
+  <div class="d-flex gap-2">
+    {% if url_listado_cxc_filtrado %}
+      <a href="{{ url_listado_cxc_filtrado }}" class="btn btn-outline-primary">
+        Ir a CxC (filtrado)
+      </a>
+    {% endif %}
+    <a href="{% url 'listar_estudiantes' %}" class="btn btn-secondary">
+      ← Volver
+    </a>
+  </div>
+</div>
 
-{% if contrato %}
-<hr>
-<h3 class="mt-5">Contrato Actual</h3>
-<table class="table table-bordered">
-  <tr>
-    <th>Número de contrato</th>
-    <td>{{ contrato.id }}</td>
-  </tr>
-  <tr>
-    <th>Estado del contrato</th>
-    <td>{{ contrato.estado }}</td>
-  </tr>
-  <tr>
-    <th>Valor total del contrato</th>
-    <td>{{ contrato.valor_total|moneda_puntos }}</td>
-  </tr>
-  <tr>
-    <th>Número de cuotas</th>
-    <td>{{ contrato.numero_cuotas }}</td>
-  </tr>
-</table>
+<div class="row g-3">
+  <!-- =========================
+       Columna izquierda: Perfil + Resumen
+       ========================= -->
+  <div class="col-12 col-lg-4">
 
-<h4 class="mt-4">Cuotas del contrato</h4>
-<table class="table table-striped">
-  <thead>
-    <tr>
-      <th># Cuota</th>
-      <th>Vencimiento</th>
-      <th>Valor</th>
-      <th>Pagado</th>
-      <th>Estado</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for cuota in cuotas %}
-    <tr class="{% if cuota.estado == 'Vencida' %}table-danger{% endif %}">
-      <td>{{ cuota.numero }}</td>
-      <td>{{ cuota.fecha_vencimiento|date:"M d, Y" }}</td>
-      <td>{{ cuota.valor|moneda_puntos }}</td>
-      <td>{{ cuota.valor_pagado|moneda_puntos }}</td>
-      <td class="{% if cuota.estado == 'Vencida' %}text-danger fw-bold{% endif %}">
-          {{ cuota.estado }}
-      </td>
-    </tr>
+    <!-- Perfil -->
+    <div class="card shadow-sm">
+      <div class="card-body">
 
-    {% empty %}
-    <tr>
-      <td colspan="5">Este contrato no tiene cuotas registradas.</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<div class="alert alert-warning mt-5">Este estudiante no tiene contratos registrados.</div>
-{% endif %}
+        <div class="d-flex align-items-start justify-content-between">
+          <div>
+            <h5 class="mb-1">{{ estudiante.nombre_completo }}</h5>
+            <div class="text-muted small">
+              ID: {{ estudiante.id }} · Estado: <strong>{{ estudiante.estado }}</strong>
+            </div>
+          </div>
 
+          <span class="badge bg-light text-dark border">
+            {{ estudiante.nivel.nombre }}
+          </span>
+        </div>
+
+        <hr>
+
+        <div class="mb-2">
+          <div class="text-muted small">Acudiente</div>
+          <div class="fw-semibold">
+            {{ estudiante.acudiente.nombre_completo|default:estudiante.acudiente }}
+          </div>
+        </div>
+
+        <div class="row g-2">
+          <div class="col-6">
+            <div class="text-muted small">Sede</div>
+            <div class="fw-semibold">{{ estudiante.sede }}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted small">Horario</div>
+            <div class="fw-semibold">{{ estudiante.horario|default:"—" }}</div>
+          </div>
+        </div>
+
+        <div class="mt-3">
+          <div class="text-muted small">Fecha de nacimiento</div>
+          <div class="fw-semibold">{{ estudiante.fecha_nacimiento|default:"—" }}</div>
+        </div>
+
+        <div class="mt-3">
+          <div class="text-muted small">Observación</div>
+          <div>{{ estudiante.observacion|default:"—" }}</div>
+        </div>
+
+        <hr>
+
+        <!-- Contacto acudiente (si existen campos) -->
+        <div class="mt-2">
+          <div class="text-muted small mb-1">Contacto acudiente</div>
+
+          <div class="row g-2">
+            <div class="col-12">
+              <div class="text-muted small">Documento</div>
+              <div class="fw-semibold">{{ estudiante.acudiente.documento|default:"—" }}</div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Teléfono</div>
+              <div class="fw-semibold">{{ estudiante.acudiente.telefono|default:"—" }}</div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="text-muted small">Email</div>
+              <div class="fw-semibold">{{ estudiante.acudiente.email|default:"—" }}</div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+    <!-- KPIs / Resumen financiero -->
+    <div class="card shadow-sm mt-3">
+      <div class="card-body">
+        <h6 class="mb-3">Resumen financiero (CxC)</h6>
+
+        <div class="row g-2">
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Valor total</div>
+              <div class="fw-bold">
+                {{ contrato.valor_total|default:0|moneda_puntos }}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Valor pagado</div>
+              <div class="fw-bold">
+                {{ kpis.total_pagado|default:0|moneda_puntos }}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Saldo pendiente</div>
+              <div class="fw-bold">
+                {{ kpis.saldo_pendiente|default:0|moneda_puntos }}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Cuotas vencidas</div>
+              <div class="fw-bold">
+                {{ kpis.vencidas_count|default:0 }} · {{ kpis.vencidas_valor|default:0|moneda_puntos }}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Próximo vencimiento</div>
+              <div class="fw-bold">
+                {% if kpis.proximo_vencimiento %}
+                  {{ kpis.proximo_vencimiento|date:"M d, Y" }}
+                {% else %}
+                  —
+                {% endif %}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Último pago</div>
+              <div class="fw-bold">
+                {% if kpis.ultimo_pago_fecha %}
+                  {{ kpis.ultimo_pago_fecha|date:"M d, Y" }}
+                {% else %}
+                  —
+                {% endif %}
+              </div>
+
+              {% if kpis.ultimo_pago_valor %}
+                <div class="small text-muted">
+                  {{ kpis.ultimo_pago_valor|moneda_puntos }}
+                  {% if kpis.ultimo_pago_medio %} · {{ kpis.ultimo_pago_medio }}{% endif %}
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        {% if kpis.alerta %}
+          <div class="alert alert-warning mt-3 mb-0">
+            {{ kpis.alerta }}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- =========================
+       Columna derecha: Contrato + Cuotas
+       ========================= -->
+  <div class="col-12 col-lg-8">
+
+    {% if contrato %}
+      <!-- Resumen del contrato -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <h5 class="mb-1">Contrato actual</h5>
+              <div class="text-muted small">
+                Contrato #{{ contrato.id }} · Estado:
+                <span class="fw-semibold">{{ contrato.estado }}</span>
+              </div>
+            </div>
+
+            <div class="text-end">
+              <div class="text-muted small">Valor total</div>
+              <div class="fw-bold">{{ contrato.valor_total|moneda_puntos }}</div>
+              <div class="small text-muted">
+                Cuotas: {{ contrato.numero_cuotas }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla cuotas -->
+      <div class="card shadow-sm">
+        <div class="card-body">
+
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <h5 class="mb-0">Estado Detallado Financiamiento del Contrato</h5>
+            <div class="text-muted small">
+              Fecha corte: {% if hoy %}{{ hoy|date:"M d, Y" }}{% else %}—{% endif %}
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-hover align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:70px">#</th>
+                  <th style="width:140px">Vence</th>
+                  <th style="width:150px">Valor</th>
+                  <th style="width:150px">Pagado</th>
+                  <th style="width:150px">Saldo</th>
+                  <th style="width:130px">Estado</th>
+                  <th class="text-end" style="width:160px">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for cuota in cuotas %}
+                  <tr class="{% if cuota.es_vencida_roja %}table-danger{% endif %}">
+                    <td class="fw-semibold">{{ cuota.numero }}</td>
+                    <td>{{ cuota.fecha_vencimiento|date:"M d, Y" }}</td>
+                    <td>{{ cuota.valor|moneda_puntos }}</td>
+                    <td>{{ cuota.pagado|moneda_puntos }}</td>
+                    <td class="fw-bold">{{ cuota.saldo|moneda_puntos }}</td>
+                    <td class="{% if cuota.estado == 'Vencida' %}text-danger fw-bold{% endif %}">
+                      {{ cuota.estado }}
+                    </td>
+
+                    <td class="text-end">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-primary btn-aplicar-pago"
+                        data-cuota="{{ cuota.id }}"
+                        data-cuota-num="{{ cuota.numero }}"
+                        data-est-id="{{ estudiante.id }}"
+                        data-estudiante="{{ estudiante.nombre_completo }}"
+                        data-acudiente="{{ estudiante.acudiente.nombre_completo|default:estudiante.acudiente }}"
+                        data-nivel="{{ estudiante.nivel.nombre }}"
+                        data-horario="{{ estudiante.horario|default:'—' }}"
+                        data-valor="{{ cuota.valor }}"
+                        data-pagado="{{ cuota.pagado|default:0 }}"
+                        data-vence="{{ cuota.fecha_vencimiento|date:'Y-m-d' }}"
+                      >
+                        Aplicar pago
+                      </button>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="7" class="text-center text-muted py-4">
+                      Este contrato no tiene cuotas registradas.
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="text-muted small mt-2">
+            Nota: las cuotas en rojo representan cartera vencida con saldo pendiente.
+          </div>
+
+        </div>
+      </div>
+
+    {% else %}
+      <div class="alert alert-warning">
+        Este estudiante no tiene contratos registrados.
+      </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<!-- ===== CONFIG QUE USA cxc.js (OBLIGATORIO) ===== -->
+<div id="cxc-config"
+  data-aplicar-url="{% url 'aplicar_pago' %}"
+  data-eliminar-url="{% url 'eliminar_pago' %}"
+  data-hoy="{{ hoy|date:'Y-m-d' }}">
+</div>
+
+{% include "modal_aplicar_pago.html" %}
+
+{% endblock %}
+
+{% block extra_js %}
+  <script src="{% static 'js/cxc.js' %}"></script>
 {% endblock %}

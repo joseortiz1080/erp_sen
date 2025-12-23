@@ -5,7 +5,7 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import (
     Sum, F, DecimalField, Value, Q, Exists, OuterRef, Subquery,IntegerField,Count,
-    BooleanField, Case, When
+    BooleanField, Case, When,
 )
 from django.db import models
 from django.db.models.functions import Coalesce
@@ -14,13 +14,13 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils.timezone import now
 from django.views.decorators.http import require_POST
 from django.views.decorators.http import require_GET
-from .models import Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente
+from .models import Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente, Ingreso
 from .forms import AcudienteForm, EstudianteForm, ContratoForm
 from django.contrib import messages
 from .forms import IngresoForm
 
 
-from decimal import Decimal,ROUND_HALF_UP
+from decimal import Decimal,ROUND_HALF_UP 
 
 # ============================
 # (B) Helper unificado de sede
@@ -179,20 +179,115 @@ def listar_estudiantes(request):
 
 @login_required
 def detalle_estudiante(request, id):
+    hoy = now().date()
+
     estudiante = get_object_or_404(
         Estudiante.objects.select_related('nivel', 'sede', 'acudiente', 'horario'),
         id=id
     )
+
     contratos = Contrato.objects.filter(estudiante=estudiante).order_by('-id')
     contrato_activo = contratos.first() if contratos.exists() else None
-    cuotas = contrato_activo.cuota_set.all() if contrato_activo else []
+
+    cuotas = []
+    kpis = {
+        'saldo_pendiente': Decimal('0.00'),
+        'total_pagado': Decimal('0.00'),
+        'vencidas_count': 0,
+        'vencidas_valor': Decimal('0.00'),
+        'proximo_vencimiento': None,
+        'ultimo_pago_fecha': None,
+        'ultimo_pago_valor': None,
+        'ultimo_pago_medio': None,
+    }
+
+    if contrato_activo:
+        cuotas = (
+            Cuota.objects
+            .filter(contrato=contrato_activo)
+            .annotate(
+                pagado=Coalesce(
+                    Sum('pagos__valor_pagado'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                ),
+            )
+            .annotate(
+                saldo=F('valor') - F('pagado'),
+                es_vencida_roja=Case(
+                    When(Q(fecha_vencimiento__lt=hoy) & Q(valor__gt=F('pagado')), then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField()
+                )
+            )
+            .order_by('numero')
+        )
+
+        resumen = cuotas.aggregate(
+            saldo_pendiente=Coalesce(Sum('saldo'), Value(Decimal('0.00'))),
+
+            vencidas_count=Coalesce(Sum(
+                Case(
+                    When(es_vencida_roja=True, then=Value(1)),
+                    default=Value(0),
+                    output_field=IntegerField()
+                )
+            ), Value(0)),
+
+            vencidas_valor=Coalesce(Sum(
+                Case(
+                    When(es_vencida_roja=True, then=F('saldo')),
+                    default=Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                )
+            ), Value(Decimal('0.00'))),
+        )
+
+        kpis['saldo_pendiente'] = resumen['saldo_pendiente'] or Decimal('0.00')
+        kpis['vencidas_count'] = int(resumen['vencidas_count'] or 0)
+        kpis['vencidas_valor'] = resumen['vencidas_valor'] or Decimal('0.00')
+
+        kpis['proximo_vencimiento'] = (
+            cuotas
+            .filter(saldo__gt=0)
+            .order_by('fecha_vencimiento')
+            .values_list('fecha_vencimiento', flat=True)
+            .first()
+        )
+
+        total_pagado = (
+            Pago.objects
+            .filter(contrato=contrato_activo)
+            .aggregate(total=Coalesce(Sum('valor_pagado'), Value(Decimal('0.00'))))
+        )['total']
+
+        # ✅ ESTA LÍNEA ES LA QUE TE FALTA
+        kpis['total_pagado'] = total_pagado or Decimal('0.00')
+
+        ultimo_pago = (
+            Pago.objects
+            .filter(contrato=contrato_activo)
+            .order_by('-fecha_pago', '-id')
+            .values('fecha_pago', 'valor_pagado', 'forma_pago')[:1]
+        )
+
+        if ultimo_pago:
+            up = ultimo_pago[0]
+            medio = up['forma_pago'] or ''
+            medio = 'Banco' if medio == 'Transferencia' else medio
+
+            kpis['ultimo_pago_fecha'] = up['fecha_pago']
+            kpis['ultimo_pago_valor'] = up['valor_pagado']
+            kpis['ultimo_pago_medio'] = medio
+
     return render(request, 'detalle_estudiante.html', {
         'estudiante': estudiante,
         'contrato': contrato_activo,
         'cuotas': cuotas,
+        'hoy': hoy,
+        'kpis': kpis,
     })
-
-
+    
 @login_required
 def listado_cxc(request):
     """
@@ -367,14 +462,19 @@ def listado_cxc(request):
 @login_required
 def aplicar_pago(request):
     """
-    GET  => retorna historial de pagos de una cuota en JSON (para el modal) + previas con saldo.
+    GET  => Retorna historial de pagos de una cuota en JSON (para el modal) + previas con saldo.
             Parámetro requerido: ?cuota_id=<id>
-    POST => crea un Pago. Por defecto BLOQUEA si hay cuotas previas con saldo.
-            Si se envía modo=auto, distribuye el pago primero en previas (más antiguas) y luego en la actual.
-    """
-    from django.utils.dateparse import parse_date  # import local
 
-    # --- Helper de seguridad/sede (B) ---
+    POST => Crea un Pago.
+            - Bloquea si hay cuotas previas con saldo.
+            - Si modo=auto, distribuye el pago primero en previas y luego en la actual.
+            - Registra automáticamente el ingreso contable.
+    """
+    from django.utils.dateparse import parse_date
+
+    # =====================================================
+    # Helper de seguridad por sede
+    # =====================================================
     def obtener_cuota_segura(cuota_id_str):
         cuota = get_object_or_404(
             Cuota.objects.select_related('contrato', 'contrato__estudiante__sede'),
@@ -382,10 +482,15 @@ def aplicar_pago(request):
         )
         sede_ids = user_sede_ids(request.user)
         if sede_ids and cuota.contrato.estudiante.sede_id not in sede_ids:
-            return None, JsonResponse({'ok': False, 'error': 'No tiene permisos sobre esta sede.'}, status=403)
+            return None, JsonResponse(
+                {'ok': False, 'error': 'No tiene permisos sobre esta sede.'},
+                status=403
+            )
         return cuota, None
 
-    # --- Helper: QS de previas (mismo contrato, numero menor) con saldo usando aggregate ---
+    # =====================================================
+    # Helper: cuotas previas con saldo (para GET)
+    # =====================================================
     def previas_pendientes_for_get(cuota):
         return (
             Cuota.objects
@@ -396,7 +501,7 @@ def aplicar_pago(request):
                     Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2)
                 ),
-                saldo=F('valor') - F('pagado'),
+                saldo=F('valor') - F('pagado')
             )
             .filter(saldo__gt=0)
             .order_by('numero')
@@ -413,9 +518,9 @@ def aplicar_pago(request):
             for c in qs
         ]
 
-    # =========================
-    # GET: historial de pagos
-    # =========================
+    # =====================================================
+    # GET → historial de pagos (modal)
+    # =====================================================
     if request.method == 'GET':
         cuota_id = (request.GET.get('cuota_id') or '').strip()
         if not cuota_id:
@@ -429,7 +534,15 @@ def aplicar_pago(request):
             Pago.objects
             .filter(cuota_id=cuota.id)
             .order_by('fecha_pago', 'id')
-            .values('id', 'fecha_pago', 'valor_pagado', 'forma_pago', 'numero_factura', 'referencia', 'observacion')
+            .values(
+                'id',
+                'fecha_pago',
+                'valor_pagado',
+                'forma_pago',
+                'numero_factura',
+                'referencia',
+                'observacion'
+            )
         )
 
         pagos = []
@@ -447,127 +560,121 @@ def aplicar_pago(request):
             })
 
         previas_qs = previas_pendientes_for_get(cuota)
-        return JsonResponse({'ok': True, 'pagos': pagos, 'previas_pendientes': serializar_previas(previas_qs)})
 
-    # ========================= #
-    # POST: aplicar pago        #
-    # ========================= #
+        return JsonResponse({
+            'ok': True,
+            'pagos': pagos,
+            'previas_pendientes': serializar_previas(previas_qs)
+        })
+
+    # =====================================================
+    # POST → aplicar pago
+    # =====================================================
     cuota_id = (request.POST.get('cuota_id') or '').strip()
     valor_str = (request.POST.get('valor_pagado') or '').strip()
     forma_pago = (request.POST.get('forma_pago') or '').strip()
     numero_factura = (request.POST.get('numero_factura') or '').strip() or None
-    referencia = (request.POST.get('referencia') or '').strip()   # referencia obligatoria
+    referencia = (request.POST.get('referencia') or '').strip()
     observacion = (request.POST.get('observacion') or '').strip()
     fecha_str = (request.POST.get('fecha_pago') or '').strip()
     modo = (request.POST.get('modo') or '').strip()  # '', 'auto'
 
-    # Validación de cuota_id primero
     if not cuota_id:
         return JsonResponse({'ok': False, 'error': 'Falta cuota_id.'}, status=400)
 
-    # Obtener cuota y validar sede
     cuota, resp_error = obtener_cuota_segura(cuota_id)
     if resp_error:
         return resp_error
 
-    # Si no viene valor, diferenciamos el caso de cuota sin saldo
     saldo_actual_previo = (cuota.valor or Decimal('0.00')) - (cuota.valor_pagado or Decimal('0.00'))
     if not valor_str:
         if saldo_actual_previo <= 0:
-            return JsonResponse({
-                'ok': False,
-                'error': 'No hay saldo por pagar en esta cuota.',
-                'error_code': 'sin_saldo'
-            }, status=400)
-        return JsonResponse({
-                'ok': False,
-                'error': 'Falta el valor a pagar.',
-                'error_code': 'faltan_datos'
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': 'No hay saldo por pagar.'}, status=400)
+        return JsonResponse({'ok': False, 'error': 'Falta el valor a pagar.'}, status=400)
 
-    # Referencia obligatoria
     if not referencia:
         return JsonResponse({'ok': False, 'error': 'La referencia es obligatoria.'}, status=400)
 
-    # Valor numérico y > 0
     try:
         valor = Decimal(valor_str)
     except Exception:
         return JsonResponse({'ok': False, 'error': 'Valor inválido.'}, status=400)
+
     if valor <= 0:
         return JsonResponse({'ok': False, 'error': 'El valor debe ser mayor a cero.'}, status=400)
 
-    from django.utils.dateparse import parse_date
-    fecha_pago = parse_date(fecha_str) if fecha_str else None
-    if not fecha_pago:
-        fecha_pago = now().date()
+    fecha_pago = parse_date(fecha_str) if fecha_str else now().date()
 
+    # =====================================================
+    # TRANSACCIÓN
+    # =====================================================
     with transaction.atomic():
-        # Bloquear cuota actual y previas
+
         cuotas_locked = list(
             Cuota.objects.select_for_update()
-            .filter(Q(id=cuota.id) | Q(contrato_id=cuota.contrato_id, numero__lt=cuota.numero))
+            .filter(
+                Q(id=cuota.id) |
+                Q(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
+            )
             .select_related('contrato')
             .order_by('numero')
         )
-        by_id = {c.id: c for c in cuotas_locked}
-        cuota = by_id[cuota.id]
+
+        cuota = next(c for c in cuotas_locked if c.id == cuota.id)
         previas_locked = [c for c in cuotas_locked if c.id != cuota.id]
 
-        def saldo_de(c: Cuota) -> Decimal:
+        def saldo_de(c):
             return (c.valor or Decimal('0.00')) - (c.valor_pagado or Decimal('0.00'))
 
         previas_con_saldo = [c for c in previas_locked if saldo_de(c) > 0]
         saldo_actual = saldo_de(cuota)
 
-        # Si hay previas con saldo y no es modo auto, bloquear
         if previas_con_saldo and modo != 'auto':
-            previas_json = [
-                {
-                    'cuota_id': c.id,
-                    'numero': c.numero,
-                    'vence': c.fecha_vencimiento.strftime('%Y-%m-%d'),
-                    'saldo': str(saldo_de(c))
-                }
-                for c in previas_con_saldo
-            ]
             return JsonResponse({
                 'ok': False,
-                'error': 'Existen cuotas anteriores con saldo pendiente. Debe cubrirlas primero o usar distribución automática.',
-                'error_code': 'previas_pendientes',
-                'previas': previas_json,
+                'error': 'Existen cuotas anteriores con saldo pendiente.',
+                'error_code': 'previas_pendientes'
             }, status=400)
 
-        # En modo auto validar capacidad total (previas + actual)
         if modo == 'auto':
             capacidad_total = sum((saldo_de(c) for c in previas_con_saldo), Decimal('0.00')) + saldo_actual
             if valor > capacidad_total:
                 return JsonResponse({
                     'ok': False,
-                    'error': f'El valor ({valor}) supera la capacidad total disponible ({capacidad_total}).',
-                    'error_code': 'supera_capacidad',
-                    'capacidad_total': str(capacidad_total),
-                    'previas': [
-                        {
-                            'cuota_id': c.id,
-                            'numero': c.numero,
-                            'vence': c.fecha_vencimiento.strftime('%Y-%m-%d'),
-                            'saldo': str(saldo_de(c))
-                        }
-                        for c in previas_con_saldo
-                    ],
+                    'error': 'El valor supera la capacidad disponible.'
                 }, status=400)
 
-        # Helper: crear pago y actualizar cuota (legacy)
-        def aplicar_a_cuota(c: Cuota, monto: Decimal) -> Decimal:
-            if monto <= 0:
-                return Decimal('0.00')
-            saldo_c = saldo_de(c)
-            aplicar = min(monto, saldo_c)
+        # =====================================================
+        # ADAPTADOR ROBUSTO PARA REGISTRAR INGRESO (anti-ruptura)
+        # =====================================================
+        def registrar_ingreso(cuota_obj, aplicar_monto, pago_obj):
+            Ingreso.objects.create(
+                sede=cuota_obj.contrato.estudiante.sede,
+                tipo_ingreso='pago_cuota',
+                valor_pagado=aplicar_monto,
+                fecha_pago=fecha_pago,
+                forma_pago=forma_pago,
+                referencia=referencia or None,
+                observacion=observacion or None,
+
+                tipo_registro='pago_cuota',
+                usuario_registro=request.user,
+
+                pago=pago_obj,
+                contrato=cuota_obj.contrato,
+                cuota=cuota_obj,
+                numero_factura=numero_factura
+            )
+
+        # =====================================================
+        # Aplicación de pago (crea Pago + Ingreso + actualiza Cuota)
+        # =====================================================
+        def aplicar_a_cuota(c, monto):
+            aplicar = min(monto, saldo_de(c))
             if aplicar <= 0:
                 return Decimal('0.00')
 
-            Pago.objects.create(
+            pago_obj = Pago.objects.create(
                 contrato=c.contrato,
                 cuota=c,
                 fecha_pago=fecha_pago,
@@ -578,42 +685,34 @@ def aplicar_pago(request):
                 observacion=observacion
             )
 
+            registrar_ingreso(c, aplicar, pago_obj)
+
             c.valor_pagado = (c.valor_pagado or Decimal('0.00')) + aplicar
-            if c.valor_pagado >= c.valor:
-                c.estado = 'Pagada'
-            elif c.valor_pagado > 0:
-                c.estado = 'Parcial'
-            else:
-                c.estado = 'Pendiente'
+            c.estado = (
+                'Pagada' if c.valor_pagado >= c.valor
+                else 'Parcial'
+            )
             c.save(update_fields=['valor_pagado', 'estado'])
             return aplicar
 
         distribucion = []
+        monto = valor
 
         if previas_con_saldo and modo == 'auto':
-            monto = valor
-            # Primero previas
             for c_prev in previas_con_saldo:
                 aplicado = aplicar_a_cuota(c_prev, monto)
+                monto -= aplicado
                 if aplicado > 0:
-                    distribucion.append({'cuota_id': c_prev.id, 'numero': c_prev.numero, 'aplicado': str(aplicado)})
-                    monto -= aplicado
+                    distribucion.append({'cuota_id': c_prev.id, 'aplicado': str(aplicado)})
                 if monto <= 0:
                     break
-            # Remanente a la actual
-            if monto > 0:
-                aplicado = aplicar_a_cuota(cuota, monto)
-                if aplicado > 0:
-                    distribucion.append({'cuota_id': cuota.id, 'numero': cuota.numero, 'aplicado': str(aplicado)})
-        else:
-            # Flujo normal: tope en saldo de la actual
-            if valor > saldo_actual:
-                return JsonResponse({'ok': False, 'error': f'El valor supera el saldo de la cuota: {saldo_actual}.'}, status=400)
-            aplicado = aplicar_a_cuota(cuota, valor)
-            distribucion.append({'cuota_id': cuota.id, 'numero': cuota.numero, 'aplicado': str(aplicado)})
+
+        if monto > 0:
+            aplicado = aplicar_a_cuota(cuota, monto)
+            if aplicado > 0:
+                distribucion.append({'cuota_id': cuota.id, 'aplicado': str(aplicado)})
 
     return JsonResponse({'ok': True, 'distribucion': distribucion})
-
 
 @login_required
 @require_POST

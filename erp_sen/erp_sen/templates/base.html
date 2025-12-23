@@ -106,6 +106,6 @@
 {% if request.path == '/nuevo-contrato/' %}
   <script src="{% static 'js/nuevo_contrato.js' %}"></script>
 {% endif %}
-
+{% block extra_js %}{% endblock %}
 </body>
 </html>
