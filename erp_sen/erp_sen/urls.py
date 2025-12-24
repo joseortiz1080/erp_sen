@@ -13,7 +13,8 @@ from gestion_clientes.views import (
     nuevo_contrato,        # nuevo-contrato
     logout_view,           # logout
     buscar_acudiente_por_documento,
-    nuevo_ingreso 
+    nuevo_ingreso,
+    listar_medios_pago,  
 )
 
 urlpatterns = [
@@ -32,5 +33,6 @@ urlpatterns = [
     path('logout/', logout_view, name='logout'),
     path('api/acudientes/buscar/', buscar_acudiente_por_documento, name='buscar_acudiente'),
     path('ingresos/nuevo/', nuevo_ingreso, name='nuevo_ingreso'),
+    path('api/medios-pago/', listar_medios_pago, name='listar_medios_pago'),
 
 ]

@@ -64,13 +64,9 @@
             </div>
             <div class="col-md-3">
               <label class="form-label">Forma de pago</label>
-              <select class="form-select" name="forma_pago" id="mp-forma">
-                <option value="Banco">Banco</option>
-                <option value="Nequi">Nequi</option>
-                <option value="Transferencia">Transferencia</option>
-                <option value="Efectivo">Efectivo</option>
-                <option value="Otro">Otro</option>
-              </select>
+            <select class="form-select" name="forma_pago" id="mp-forma" required>
+              <option value="" selected disabled>Cargando medios...</option>
+            </select>
             </div>
             <div class="col-md-3">
               <label class="form-label">N° factura (opcional)</label>

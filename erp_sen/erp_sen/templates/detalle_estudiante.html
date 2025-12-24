@@ -6,6 +6,10 @@
 
 {% block content %}
 
+  <!-- =========================
+      Archivo cargado 24/12/2025
+       ========================= -->
+
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
     <h2 class="mb-0">Detalle del Estudiante</h2>
@@ -302,17 +306,24 @@
   </div>
 </div>
 
-<!-- ===== CONFIG QUE USA cxc.js (OBLIGATORIO) ===== -->
-<div id="cxc-config"
-  data-aplicar-url="{% url 'aplicar_pago' %}"
-  data-eliminar-url="{% url 'eliminar_pago' %}"
-  data-hoy="{{ hoy|date:'Y-m-d' }}">
-</div>
+
 
 {% include "modal_aplicar_pago.html" %}
 
 {% endblock %}
 
 {% block extra_js %}
+
+  <!-- CONFIG QUE USA cxc.js (OBLIGATORIO) -->
+  <div id="cxc-config"
+       data-aplicar-url="{% url 'aplicar_pago' %}"
+       data-eliminar-url="{% url 'eliminar_pago' %}"
+       data-medios-url="{% url 'listar_medios_pago' %}"
+       data-hoy="{{ hoy|date:'Y-m-d' }}">
+  </div>
+
+  {% include "modal_aplicar_pago.html" %}
+
   <script src="{% static 'js/cxc.js' %}"></script>
+
 {% endblock %}

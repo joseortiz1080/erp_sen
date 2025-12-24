@@ -8,11 +8,12 @@
   const URL_APLICAR  = cfg.dataset.aplicarUrl || '';
   const URL_ELIMINAR = cfg.dataset.eliminarUrl || '';
   const HOY_DEFAULT  = cfg.dataset.hoy || '';
+  const URL_MEDIOS  = cfg.dataset.mediosUrl || '';
 
-  if (!URL_APLICAR || !URL_ELIMINAR) {
-    console.error('Faltan URLs en cxc-config (aplicar/eliminar).');
-    return;
-  }
+  if (!URL_APLICAR || !URL_ELIMINAR || !URL_MEDIOS) {
+  console.error('Faltan URLs en cxc-config (aplicar/eliminar/medios).');
+  return;
+  } 
 
   if (!window.bootstrap || !bootstrap.Modal) {
     console.error('Bootstrap JS (bundle) no está cargado antes de cxc.js.');
@@ -85,6 +86,40 @@
       return { __json_parse_error__: true };
     }
   }
+
+  let mediosCargados = false;
+
+async function cargarMedios() {
+  if (mediosCargados) return;
+
+  if (!fForma) { console.error('#mp-forma no existe'); return; }
+
+  // placeholder
+  fForma.innerHTML = '<option value="">Cargando medios…</option>';
+
+  try {
+    const resp = await fetch(URL_MEDIOS, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+      credentials: 'same-origin'
+    });
+
+    const data = await safeJson(resp, 'medios_pago');
+    if (!resp.ok || !data.ok || !Array.isArray(data.medios)) {
+      throw new Error(data.error || `No se pudieron cargar medios (HTTP ${resp.status}).`);
+    }
+
+    // opciones
+    fForma.innerHTML = '<option value="">Seleccione…</option>' +
+      data.medios.map(m => `<option value="${m.nombre}">${m.nombre}</option>`).join('');
+
+    mediosCargados = true;
+
+  } catch (err) {
+    console.error(err);
+    fForma.innerHTML = '<option value="">Error cargando medios</option>';
+  }
+}
+
 
   async function cargarHistorial(cuotaId) {
     tbodyHist.innerHTML = '<tr><td colspan="8" class="text-muted">Cargando…</td></tr>';
@@ -182,6 +217,7 @@
   // =========================
   document.querySelectorAll('.btn-aplicar-pago').forEach(btn => {
     btn.addEventListener('click', () => {
+      cargarMedios();
       const cuotaId    = btn.dataset.cuota;
       const cuotaNum   = btn.dataset.cuotaNum || '';
       const estudiante = btn.dataset.estudiante || '';
@@ -207,7 +243,7 @@
       fSaldoTxt.value  = formatCOP(saldo);
 
       fFecha.value = fFecha.value || HOY_DEFAULT;
-      fForma.value = 'Banco';
+      if (fForma) fForma.value = '';
       fFactura.value = '';
       fReferencia.value = '';
 
