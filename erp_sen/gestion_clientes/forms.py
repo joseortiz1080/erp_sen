@@ -2,10 +2,14 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 import re
-from .models import Acudiente, Estudiante, Contrato
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
-from .models import Ingreso,Sede
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
+from .models import Acudiente, Estudiante, Contrato, Ingreso, Sede
+
+
+# ==========================================================
+#  FORMULARIOS AUXILIARES (existentes)
+# ==========================================================
 class AcudienteExistenteForm(forms.Form):
     acudiente_existente = forms.ModelChoiceField(
         queryset=Acudiente.objects.order_by('nombre_completo'),
@@ -22,6 +26,9 @@ class EstudianteExistenteForm(forms.Form):
     )
 
 
+# ==========================================================
+#  ACUDIENTE
+# ==========================================================
 class AcudienteForm(forms.ModelForm):
     email = forms.EmailField(
         required=True,
@@ -62,10 +69,14 @@ class AcudienteForm(forms.ModelForm):
         return tel
 
 
+# ==========================================================
+#  ESTUDIANTE
+# ==========================================================
 class EstudianteForm(forms.ModelForm):
     class Meta:
         model = Estudiante
-        exclude = ['valor_paquete_total']
+        # ✅ AJUSTE MÍNIMO: excluir acudiente porque se asigna en backend (commit=False)
+        exclude = ['valor_paquete_total', 'acudiente']
         widgets = {
             "nombre_completo": forms.TextInput(attrs={"class": "form-control"}),
             "tipo_documento": forms.Select(attrs={"class": "form-select"}),
@@ -81,7 +92,7 @@ class EstudianteForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for f in ["nombre_completo", "tipo_documento", "documento", "fecha_nacimiento",
-                "nivel", "sede", "estado", "horario"]:
+                  "nivel", "sede", "estado", "horario"]:
             if f in self.fields:
                 self.fields[f].required = True
                 self.fields[f].error_messages["required"] = "Este campo es obligatorio."
@@ -99,8 +110,16 @@ class EstudianteForm(forms.ModelForm):
         return fn
 
 
+# ==========================================================
+#  CONTRATO (AJUSTADO PARA COP ENTEROS + PUNTOS)
+# ==========================================================
 class ContratoForm(forms.ModelForm):
-    # Ahora hasta 24 cuotas
+    """
+    Clave: sobrescribimos los fields a CharField para que Django NO intente
+    parsear como DecimalField antes de nuestros clean_*.
+    """
+
+    # Hasta 24 cuotas
     numero_cuotas = forms.TypedChoiceField(
         choices=[(i, str(i)) for i in range(1, 25)],
         coerce=int,
@@ -108,61 +127,113 @@ class ContratoForm(forms.ModelForm):
         widget=forms.Select(attrs={"class": "form-select"})
     )
 
+    # ✅ Sobrescritura crítica (evita "Enter a number" / "decimal places")
+    valor_total = forms.CharField(
+        required=True,
+        widget=forms.TextInput(attrs={
+            "class": "form-control text-end",
+            "inputmode": "numeric",
+            "placeholder": "10.000.000"
+        }),
+        error_messages={"required": "Este campo es obligatorio."}
+    )
+
+    # ✅ También como texto (viene calculado del JS en formato COP)
+    valor_cuota_pactada = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": "form-control text-end bg-light",
+            "readonly": "readonly",
+            "inputmode": "numeric",
+        })
+    )
+
+    # ✅ Campo que viene del HTML/JS (aunque NO esté en el modelo Contrato)
+    cuota_inicial = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": "form-control text-end",
+            "inputmode": "numeric",
+            "placeholder": "0"
+        })
+    )
+
+    # ✅ Campo calculado en front (readonly), lo recibimos para consistencia
+    valor_a_financiar = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": "form-control text-end bg-light",
+            "readonly": "readonly",
+            "inputmode": "numeric",
+        })
+    )
+
     class Meta:
         model = Contrato
         fields = ['fecha_inicio', 'fecha_fin', 'valor_total', 'valor_cuota_pactada', 'numero_cuotas', 'estado']
         widgets = {
             "fecha_inicio": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),
-            "fecha_fin": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),  # se calcula
-            "valor_total": forms.TextInput(attrs={
-                "class": "form-control text-end",
-                "inputmode": "numeric",
-                "placeholder": "12.000.000,00"
-            }),
-            "valor_cuota_pactada": forms.NumberInput(attrs={
-                "class": "form-control text-end",
-                "step": "0.01",
-                "readonly": "readonly"
-            }),
-            "estado": forms.HiddenInput(),  # oculto; lo forzamos a "Activo"
+            "fecha_fin": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),
+            "estado": forms.HiddenInput(),
         }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for f in ["fecha_inicio", "valor_total", "numero_cuotas", "estado"]:
-            if f in self.fields:
-                self.fields[f].required = True
-                self.fields[f].error_messages["required"] = "Este campo es obligatorio."
-        if "fecha_fin" in self.fields:
-            self.fields["fecha_fin"].required = False
-        if "valor_cuota_pactada" in self.fields:
-            self.fields["valor_cuota_pactada"].required = False
-            self.fields["valor_cuota_pactada"].disabled = False
-        # Estado por defecto
-        if "estado" in self.fields:
-            self.fields["estado"].initial = "Activo"
+    # ---------------------------
+    # Normalizador COP (ENTEROS)
+    # ---------------------------
+    def _cop_to_decimal_int(self, raw, field_label="valor"):
+        """
+        Acepta:
+          "10.000.000" / "$ 10.000.000" / "10000000" -> Decimal("10000000")
+          "416.667" -> Decimal("416667")
 
-    def clean_valor_total(self):
-        raw = self.cleaned_data.get("valor_total")
+        Política actual: SIN DECIMALES (solo enteros COP).
+        """
         if raw is None:
-            raise ValidationError("El valor total es obligatorio.")
+            raise ValidationError(f"El {field_label} es obligatorio.")
+
         s = str(raw).strip()
         if not s:
-            raise ValidationError("El valor total es obligatorio.")
+            raise ValidationError(f"El {field_label} es obligatorio.")
+
         s = s.replace("$", "").replace(" ", "")
+        digits = re.sub(r"[^\d]", "", s)
+
+        if digits == "":
+            raise ValidationError(f"Formato de {field_label} inválido. Ej: 10.000.000")
+
         try:
-            if "," in s and "." in s:
-                if s.rfind(",") > s.rfind("."):
-                    s = s.replace(".", "").replace(",", ".")
-                else:
-                    s = s.replace(",", "")
-            elif "," in s:
-                s = s.replace(".", "").replace(",", ".")
-            value = Decimal(s)
+            return Decimal(digits)
         except (InvalidOperation, ValueError):
-            raise ValidationError("Formato de número inválido. Ej: 12.000.000,00")
+            raise ValidationError(f"Formato de {field_label} inválido. Ej: 10.000.000")
+
+    def clean_valor_total(self):
+        value = self._cop_to_decimal_int(self.cleaned_data.get("valor_total"), "valor total")
         if value <= 0:
             raise ValidationError("El valor total debe ser mayor a cero.")
+        return value
+
+    def clean_valor_cuota_pactada(self):
+        raw = self.cleaned_data.get("valor_cuota_pactada")
+        if raw in (None, "", "0", 0):
+            return Decimal("0")
+        return self._cop_to_decimal_int(raw, "valor cuota pactada")
+
+    def clean_cuota_inicial(self):
+        raw = self.cleaned_data.get("cuota_inicial")
+        if raw in (None, "", "0", 0):
+            return Decimal("0")
+        value = self._cop_to_decimal_int(raw, "cuota inicial")
+        if value < 0:
+            raise ValidationError("La cuota inicial no puede ser negativa.")
+        return value
+
+    def clean_valor_a_financiar(self):
+        raw = self.cleaned_data.get("valor_a_financiar")
+        if raw in (None, "", "0", 0):
+            return Decimal("0")
+        value = self._cop_to_decimal_int(raw, "valor a financiar")
+        if value < 0:
+            return Decimal("0")
         return value
 
     def clean_fecha_inicio(self):
@@ -173,33 +244,47 @@ class ContratoForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+
         fi = cleaned.get("fecha_inicio")
         ff = cleaned.get("fecha_fin")
         if fi and ff and ff < fi:
             self.add_error("fecha_fin", "La fecha fin no puede ser anterior a la fecha de inicio.")
-        total = cleaned.get("valor_total")
+
+        # ✅ Cálculo de cuota pactada basado en VALOR A FINANCIAR (total - cuota inicial)
+        total = cleaned.get("valor_total")  # Decimal (por clean_valor_total)
+        inicial = cleaned.get("cuota_inicial") or Decimal("0")
         n = cleaned.get("numero_cuotas")
-        if total is not None and n:
-            try:
-                cuota = (Decimal(total) / Decimal(n)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                cleaned["valor_cuota_pactada"] = cuota
-            except Exception:
-                self.add_error("valor_total", "No fue posible calcular el valor de la cuota.")
-        # Forzar estado Activo
+
+        if total is not None:
+            financiar = total - inicial
+            if financiar < 0:
+                financiar = Decimal("0")
+
+            # coherencia backend (aunque no sea field del modelo)
+            cleaned["valor_a_financiar"] = financiar
+
+            if n:
+                try:
+                    cuota = (Decimal(financiar) / Decimal(n))
+                    cuota_entera = int(cuota.to_integral_value(rounding=ROUND_CEILING))
+                    cleaned["valor_cuota_pactada"] = Decimal(cuota_entera)
+                except Exception:
+                    self.add_error("valor_total", "No fue posible calcular el valor de la cuota.")
+
         cleaned["estado"] = "Activo"
         return cleaned
 
-from django import forms
-from .models import Ingreso, Sede
 
+# ==========================================================
+#  INGRESO
+# ==========================================================
 class IngresoForm(forms.ModelForm):
     class Meta:
         model = Ingreso
-        fields = ['fecha_pago', 'tipo_ingreso', 'valor_pagado', 'forma_pago',
+        fields = ['fecha_pago', 'valor_pagado', 'forma_pago',
                 'observacion', 'referencia', 'numero_factura', 'sede']
         labels = {
             'fecha_pago': 'Fecha',
-            'tipo_ingreso': 'Concepto',
             'valor_pagado': 'Valor',
             'forma_pago': 'Método',
             'observacion': 'Observación',
@@ -209,7 +294,6 @@ class IngresoForm(forms.ModelForm):
         }
         widgets = {
             'fecha_pago': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
-            'tipo_ingreso': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Certificado, Libro, Bus, etc.'}),
             'valor_pagado': forms.NumberInput(attrs={'class': 'form-control', 'min': '0', 'step': '0.01'}),
             'forma_pago': forms.Select(choices=[
                 ('Efectivo', 'Efectivo'),
@@ -224,22 +308,18 @@ class IngresoForm(forms.ModelForm):
             'sede': forms.Select(attrs={'class': 'form-select'}),
         }
 
-
     def __init__(self, *args, **kwargs):
-        user = kwargs.pop('user', None)  # 👈 NECESARIO
+        user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
 
-        # Por defecto, no mostrar nada
         self.fields['sede'].queryset = Sede.objects.none()
 
         if not user:
             return
 
-        # Si es Admin / CEO / CFO → todas las sedes
         if user.is_superuser or user.groups.filter(name__in=['Admin', 'CEO', 'CFO']).exists():
             self.fields['sede'].queryset = Sede.objects.all()
         else:
-            # Si tiene perfil con sedes
             perfil = getattr(user, 'perfil', None)
             if perfil:
                 if hasattr(perfil, 'sedes'):  # ManyToMany

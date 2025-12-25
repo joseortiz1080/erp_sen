@@ -1,3 +1,5 @@
+<!-- TEMPLATE NUEVO_CONTRATO VERSION: 2025-12-23 16:25 -->
+
 {% extends "base.html" %}
 {% load static %}
 {% load form_helpers %}
@@ -11,12 +13,47 @@
 {% block content %}
 <div class="container-xl py-4">
   <div class="d-flex align-items-center justify-content-between mb-3">
-    <h2 class="mb-0">Crear nuevo contrato</h2>
+    <h2 class="mb-0">Crear nuevo contrato Es este </h2>
     <a href="{% url 'listado_cxc' %}" class="btn btn-outline-secondary btn-sm">Volver</a>
   </div>
-  
+
   <form method="post" novalidate>
     {% csrf_token %}
+
+        {# =========================== PANEL DE ERRORES / MENSAJES (NO cambia lógica, solo visibilidad) =========================== #}
+
+    {% if messages %}
+      <div class="mb-3">
+        {% for message in messages %}
+          <div class="alert alert-{{ message.tags }} mb-2" role="alert">
+            {{ message }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if form_acudiente.non_field_errors %}
+      <div class="alert alert-danger mb-3" role="alert">
+        <strong>Acudiente:</strong>
+        <div class="mt-1">{{ form_acudiente.non_field_errors }}</div>
+      </div>
+    {% endif %}
+
+    {% if form_estudiante.non_field_errors %}
+      <div class="alert alert-danger mb-3" role="alert">
+        <strong>Estudiante:</strong>
+        <div class="mt-1">{{ form_estudiante.non_field_errors }}</div>
+      </div>
+    {% endif %}
+
+    {% if form_contrato.non_field_errors %}
+      <div class="alert alert-danger mb-3" role="alert">
+        <strong>Contrato:</strong>
+        <div class="mt-1">{{ form_contrato.non_field_errors }}</div>
+      </div>
+    {% endif %}
+
+        {# =========================== FIN PANEL DE ERRORES / MENSAJES =========================== #}
 
     <div class="row g-4">
       <!-- Acudiente -->
@@ -24,6 +61,16 @@
         <section class="card card-soft h-100">
           <div class="card-body">
             <h5 class="section-heading">Acudiente</h5>
+
+            {# ================= AJUSTE: errores globales del form_acudiente ================= #}
+            {% if form_acudiente.non_field_errors %}
+              <div class="alert alert-danger">
+                {% for err in form_acudiente.non_field_errors %}
+                  <div>{{ err }}</div>
+                {% endfor %}
+              </div>
+            {% endif %}
+            {# =============== FIN AJUSTE: errores globales del form_acudiente =============== #}
 
             <!-- Buscar acudiente (input -> ayuda -> botón -> mensaje) -->
             <div class="mb-4">
@@ -85,6 +132,16 @@
         <section class="card card-soft h-100">
           <div class="card-body">
             <h5 class="section-heading">Nuevo Estudiante</h5>
+
+            {# ================= AJUSTE: errores globales del form_estudiante ================= #}
+            {% if form_estudiante.non_field_errors %}
+              <div class="alert alert-danger">
+                {% for err in form_estudiante.non_field_errors %}
+                  <div>{{ err }}</div>
+                {% endfor %}
+              </div>
+            {% endif %}
+            {# =============== FIN AJUSTE: errores globales del form_estudiante =============== #}
 
             <div class="row g-3">
               <div class="col-12">
@@ -161,7 +218,18 @@
       <div class="card-body">
         <h5 class="section-heading">Datos del Contrato</h5>
 
+        {# ================= AJUSTE: errores globales del form_contrato ================= #}
+        {% if form_contrato.non_field_errors %}
+          <div class="alert alert-danger">
+            {% for err in form_contrato.non_field_errors %}
+              <div>{{ err }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {# =============== FIN AJUSTE: errores globales del form_contrato =============== #}
+
         <div class="row g-3">
+
           <!-- 1) Valor total -->
           <div class="col-12 col-md-4">
             <label class="form-label">Valor total</label>
@@ -174,7 +242,43 @@
             {% endfor %}
           </div>
 
-          <!-- 2) Número de cuotas -->
+          <!-- 2) Cuota inicial -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Cuota inicial</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input
+                type="number"
+                name="cuota_inicial"
+                id="cuota_inicial"
+                class="form-control text-end"
+                min="0"
+                step="1"
+                value="0"
+                placeholder="0"
+              >
+            </div>
+            <div class="form-text">Opcional. Si no aplica, deje en 0.</div>
+          </div>
+
+          <!-- 3) Valor a financiar -->
+          <div class="col-12 col-md-4">
+            <label class="form-label">Valor a financiar</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input
+                type="text"
+                name="valor_a_financiar"
+                id="valor_a_financiar"
+                class="form-control text-end bg-light"
+                value="0"
+                readonly
+              >
+            </div>
+            <div class="form-text">Se calcula: Valor total - Cuota inicial.</div>
+          </div>
+
+          <!-- 4) Número de cuotas -->
           <div class="col-12 col-md-4">
             <label class="form-label">Número de cuotas</label>
             {{ form_contrato.numero_cuotas|add_class:"form-select" }}
@@ -183,7 +287,7 @@
             {% endfor %}
           </div>
 
-          <!-- 3) Valor cuota pactada (readonly, calculado) -->
+          <!-- 5) Valor cuota pactada -->
           <div class="col-12 col-md-4">
             <label class="form-label">Valor cuota pactada</label>
             <div class="input-group">
@@ -195,7 +299,7 @@
             {% endfor %}
           </div>
 
-          <!-- (Nuevo) Día de corte -->
+          <!-- Día de corte -->
           <div class="col-12 col-md-4">
             <label class="form-label">Día de corte</label>
             <select id="dia_corte" name="dia_corte" class="form-select" required>
@@ -205,7 +309,7 @@
             <div class="form-text">Se tomará del mes siguiente.</div>
           </div>
 
-          <!-- 4) Fecha inicio (solo lectura, calculada automáticamente) -->
+          <!-- Fecha inicio -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha inicio</label>
             {{ form_contrato.fecha_inicio|add_class:"form-control bg-light"|attr:"readonly:readonly" }}
@@ -215,7 +319,7 @@
             {% endfor %}
           </div>
 
-          <!-- 5) Fecha fin (solo lectura, calculada automáticamente) -->
+          <!-- Fecha fin -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha fin</label>
             {{ form_contrato.fecha_fin|add_class:"form-control bg-light"|attr:"readonly:readonly" }}

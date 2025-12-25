@@ -1,26 +1,39 @@
 from decimal import Decimal, ROUND_HALF_UP
+
+from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import (
-    Sum, F, DecimalField, Value, Q, Exists, OuterRef, Subquery,IntegerField,Count,
-    BooleanField, Case, When,
+    Sum, F, DecimalField, Value, Q, Exists, OuterRef, Subquery,
+    IntegerField, Count, BooleanField, Case, When
 )
-from django.db import models
 from django.db.models.functions import Coalesce
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils.timezone import now
-from django.views.decorators.http import require_POST
-from django.views.decorators.http import require_GET
-from .models import Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente, Ingreso
-from .forms import AcudienteForm, EstudianteForm, ContratoForm
-from django.contrib import messages
-from .forms import IngresoForm
+from django.views.decorators.http import require_POST, require_GET
 
+from .forms import AcudienteForm, EstudianteForm, ContratoForm, IngresoForm
+from .models import (
+    Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente,
+    MedioPago, ConceptoIngreso
+)
 
-from decimal import Decimal,ROUND_HALF_UP 
+@require_GET
+@login_required
+def listar_medios_pago(request):
+    """
+    Retorna medios de pago activos desde gestion_finanzas_medio_pago
+    """
+    medios = list(
+        MedioPago.objects
+        .filter(activo=True)
+        .order_by('nombre')
+        .values('id', 'nombre')
+    )
+    return JsonResponse({'ok': True, 'medios': medios})
 
 # ============================
 # (B) Helper unificado de sede
@@ -268,13 +281,12 @@ def detalle_estudiante(request, id):
             Pago.objects
             .filter(contrato=contrato_activo)
             .order_by('-fecha_pago', '-id')
-            .values('fecha_pago', 'valor_pagado', 'forma_pago')[:1]
+            .values('fecha_pago', 'valor_pagado', 'medio_pago__nombre')[:1]
         )
 
         if ultimo_pago:
             up = ultimo_pago[0]
-            medio = up['forma_pago'] or ''
-            medio = 'Banco' if medio == 'Transferencia' else medio
+            medio = up.get('medio_pago__nombre') or ''
 
             kpis['ultimo_pago_fecha'] = up['fecha_pago']
             kpis['ultimo_pago_valor'] = up['valor_pagado']
@@ -302,7 +314,7 @@ def listado_cxc(request):
     # --------- Subqueries: último pago por cuota (legacy) ---------
     pagos_ordenados = Pago.objects.filter(cuota_id=OuterRef('pk')).order_by('-fecha_pago', '-id')
     ultimo_pago_fecha      = Subquery(pagos_ordenados.values('fecha_pago')[:1])
-    ultimo_pago_medio      = Subquery(pagos_ordenados.values('forma_pago')[:1])
+    ultimo_pago_medio      = Subquery(pagos_ordenados.values('medio_pago__nombre')[:1])
     ultimo_pago_obs        = Subquery(pagos_ordenados.values('observacion')[:1])
     ultimo_pago_factura    = Subquery(pagos_ordenados.values('numero_factura')[:1])
     ultimo_pago_referencia = Subquery(pagos_ordenados.values('referencia')[:1])  # NUEVO
@@ -391,7 +403,10 @@ def listado_cxc(request):
     # Medio
     if medio:
         qs = qs.annotate(tiene_medio=Exists(
-            Pago.objects.filter(cuota_id=OuterRef('pk'), forma_pago=medio)
+            Pago.objects.filter(
+                cuota_id=OuterRef('pk'),
+                medio_pago__nombre__iexact=medio
+            )
         )).filter(tiene_medio=True)
 
     # Factura
@@ -538,7 +553,7 @@ def aplicar_pago(request):
                 'id',
                 'fecha_pago',
                 'valor_pagado',
-                'forma_pago',
+                'medio_pago__nombre',
                 'numero_factura',
                 'referencia',
                 'observacion'
@@ -547,13 +562,13 @@ def aplicar_pago(request):
 
         pagos = []
         for p in pagos_qs:
-            medio = p['forma_pago'] or ''
+            medio = (p.get('medio_pago__nombre') or '')
             medio = 'Banco' if medio == 'Transferencia' else medio
             pagos.append({
                 'id': p['id'],
                 'fecha_pago': p['fecha_pago'].strftime('%Y-%m-%d'),
                 'valor_pagado': str(p['valor_pagado']),
-                'forma_pago': medio,
+                'medio_pago': medio,
                 'numero_factura': p['numero_factura'] or '',
                 'referencia': p['referencia'] or '',
                 'observacion': p['observacion'] or '',
@@ -572,13 +587,28 @@ def aplicar_pago(request):
     # =====================================================
     cuota_id = (request.POST.get('cuota_id') or '').strip()
     valor_str = (request.POST.get('valor_pagado') or '').strip()
-    forma_pago = (request.POST.get('forma_pago') or '').strip()
     numero_factura = (request.POST.get('numero_factura') or '').strip() or None
     referencia = (request.POST.get('referencia') or '').strip()
     observacion = (request.POST.get('observacion') or '').strip()
     fecha_str = (request.POST.get('fecha_pago') or '').strip()
     modo = (request.POST.get('modo') or '').strip()  # '', 'auto'
+    fecha_pago = parse_date(fecha_str) if fecha_str else now().date()
+    forma_pago_txt = (request.POST.get('forma_pago') or '').strip()
 
+    if not forma_pago_txt:
+        return JsonResponse({'ok': False, 'error': 'Debe seleccionar un medio de pago.'}, status=400)
+
+    medio_pago = MedioPago.objects.filter(
+        nombre__iexact=forma_pago_txt,
+        activo=True
+    ).first()
+
+    if not medio_pago:
+        return JsonResponse(
+            {'ok': False, 'error': 'Medio de pago no válido o inactivo.'},
+            status=400
+        )
+    
     if not cuota_id:
         return JsonResponse({'ok': False, 'error': 'Falta cuota_id.'}, status=400)
 
@@ -587,6 +617,7 @@ def aplicar_pago(request):
         return resp_error
 
     saldo_actual_previo = (cuota.valor or Decimal('0.00')) - (cuota.valor_pagado or Decimal('0.00'))
+
     if not valor_str:
         if saldo_actual_previo <= 0:
             return JsonResponse({'ok': False, 'error': 'No hay saldo por pagar.'}, status=400)
@@ -603,116 +634,167 @@ def aplicar_pago(request):
     if valor <= 0:
         return JsonResponse({'ok': False, 'error': 'El valor debe ser mayor a cero.'}, status=400)
 
-    fecha_pago = parse_date(fecha_str) if fecha_str else now().date()
+    forma_pago_txt = (request.POST.get('forma_pago') or '').strip()
 
-    # =====================================================
-    # TRANSACCIÓN
-    # =====================================================
-    with transaction.atomic():
+    if not forma_pago_txt:
+        return JsonResponse({'ok': False, 'error': 'Debe seleccionar un medio de pago.'}, status=400)
 
-        cuotas_locked = list(
-            Cuota.objects.select_for_update()
-            .filter(
-                Q(id=cuota.id) |
-                Q(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
-            )
-            .select_related('contrato')
-            .order_by('numero')
+    medio_pago = MedioPago.objects.filter(
+        nombre__iexact=forma_pago_txt,
+        activo=True
+    ).first()
+
+    if not medio_pago:
+        return JsonResponse(
+            {'ok': False, 'error': 'Medio de pago no válido o inactivo.'},
+            status=400
         )
 
-        cuota = next(c for c in cuotas_locked if c.id == cuota.id)
-        previas_locked = [c for c in cuotas_locked if c.id != cuota.id]
-
-        def saldo_de(c):
-            return (c.valor or Decimal('0.00')) - (c.valor_pagado or Decimal('0.00'))
-
-        previas_con_saldo = [c for c in previas_locked if saldo_de(c) > 0]
-        saldo_actual = saldo_de(cuota)
-
-        if previas_con_saldo and modo != 'auto':
+    # =====================================================
+    # Validación previa (FUERA del atomic) para evitar returns dentro de la transacción
+    # =====================================================
+    if modo != 'auto':
+        previas_exist = (
+            Cuota.objects
+            .filter(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
+            .annotate(saldo=F('valor') - F('valor_pagado'))
+            .filter(saldo__gt=0)
+            .exists()
+        )
+        if previas_exist:
             return JsonResponse({
                 'ok': False,
                 'error': 'Existen cuotas anteriores con saldo pendiente.',
                 'error_code': 'previas_pendientes'
             }, status=400)
 
-        if modo == 'auto':
-            capacidad_total = sum((saldo_de(c) for c in previas_con_saldo), Decimal('0.00')) + saldo_actual
-            if valor > capacidad_total:
-                return JsonResponse({
+    # =====================================================
+    # Excepción controlada para romper atomic con rollback sin return interno
+    # =====================================================
+    class _AbortarPago(Exception):
+        def __init__(self, payload, status=400):
+            self.payload = payload
+            self.status = status
+            super().__init__(payload.get('error', 'Abortado'))
+
+    # =====================================================
+    # TRANSACCIÓN
+    # =====================================================
+    try:
+        with transaction.atomic():
+
+            cuotas_locked = list(
+                Cuota.objects.select_for_update()
+                .filter(
+                    Q(id=cuota.id) |
+                    Q(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
+                )
+                .select_related('contrato')
+                .order_by('numero')
+            )
+
+            cuota = next(c for c in cuotas_locked if c.id == cuota.id)
+            previas_locked = [c for c in cuotas_locked if c.id != cuota.id]
+
+            def saldo_de(c):
+                return (c.valor or Decimal('0.00')) - (c.valor_pagado or Decimal('0.00'))
+
+            previas_con_saldo = [c for c in previas_locked if saldo_de(c) > 0]
+            saldo_actual = saldo_de(cuota)
+
+            # Re-validación con locks (consistencia)
+            if previas_con_saldo and modo != 'auto':
+                raise _AbortarPago({
                     'ok': False,
-                    'error': 'El valor supera la capacidad disponible.'
+                    'error': 'Existen cuotas anteriores con saldo pendiente.',
+                    'error_code': 'previas_pendientes'
                 }, status=400)
 
-        # =====================================================
-        # ADAPTADOR ROBUSTO PARA REGISTRAR INGRESO (anti-ruptura)
-        # =====================================================
-        def registrar_ingreso(cuota_obj, aplicar_monto, pago_obj):
-            Ingreso.objects.create(
-                sede=cuota_obj.contrato.estudiante.sede,
-                tipo_ingreso='pago_cuota',
-                valor_pagado=aplicar_monto,
-                fecha_pago=fecha_pago,
-                forma_pago=forma_pago,
-                referencia=referencia or None,
-                observacion=observacion or None,
+            if modo == 'auto':
+                capacidad_total = sum((saldo_de(c) for c in previas_con_saldo), Decimal('0.00')) + saldo_actual
+                if valor > capacidad_total:
+                    raise _AbortarPago({
+                        'ok': False,
+                        'error': 'El valor supera la capacidad disponible.'
+                    }, status=400)
 
-                tipo_registro='pago_cuota',
-                usuario_registro=request.user,
+            # =====================================================
+            # Registrar ingreso (tu modelo actual SOLO usa forma_pago texto)
+            # =====================================================
+            def registrar_ingreso(cuota_obj, aplicar_monto, pago_obj, fecha_pago, usuario, numero_factura):
+                Ingreso.objects.create(
+                    sede=cuota_obj.contrato.estudiante.sede,
+                    #estudiante=cuota_obj.contrato.estudiante,
+                    concepto_ingreso=ConceptoIngreso.objects.get(pk=1),
 
-                pago=pago_obj,
-                contrato=cuota_obj.contrato,
-                cuota=cuota_obj,
-                numero_factura=numero_factura
-            )
+                    valor_pagado=aplicar_monto,
+                    fecha_pago=fecha_pago,
 
-        # =====================================================
-        # Aplicación de pago (crea Pago + Ingreso + actualiza Cuota)
-        # =====================================================
-        def aplicar_a_cuota(c, monto):
-            aplicar = min(monto, saldo_de(c))
-            if aplicar <= 0:
-                return Decimal('0.00')
+                    forma_pago=medio_pago.nombre,
 
-            pago_obj = Pago.objects.create(
-                contrato=c.contrato,
-                cuota=c,
-                fecha_pago=fecha_pago,
-                valor_pagado=aplicar,
-                forma_pago=forma_pago,
-                numero_factura=numero_factura,
-                referencia=referencia,
-                observacion=observacion
-            )
+                    referencia=referencia or None,
+                    observacion=observacion or None,
+                    tipo_registro='pago_cuota',
+                    usuario_registro=usuario,
+                    pago=pago_obj,
+                    contrato=cuota_obj.contrato,
+                    cuota=cuota_obj,
+                    numero_factura=numero_factura
+                )
 
-            registrar_ingreso(c, aplicar, pago_obj)
+            # =====================================================
+            # Aplicación de pago (crea Pago + Ingreso + actualiza Cuota)
+            # =====================================================
+            def aplicar_a_cuota(c, monto):
+                aplicar = min(monto, saldo_de(c))
+                if aplicar <= 0:
+                    return Decimal('0.00')
 
-            c.valor_pagado = (c.valor_pagado or Decimal('0.00')) + aplicar
-            c.estado = (
-                'Pagada' if c.valor_pagado >= c.valor
-                else 'Parcial'
-            )
-            c.save(update_fields=['valor_pagado', 'estado'])
-            return aplicar
+                pago_obj = Pago.objects.create(
+                    contrato=c.contrato,
+                    cuota=c,
+                    fecha_pago=fecha_pago,
+                    valor_pagado=aplicar,
+                    medio_pago=medio_pago,
+                    numero_factura=numero_factura,
+                    referencia=referencia,
+                    observacion=observacion,
+                )
 
-        distribucion = []
-        monto = valor
+                registrar_ingreso(c, aplicar, pago_obj, fecha_pago, request.user, numero_factura)
 
-        if previas_con_saldo and modo == 'auto':
-            for c_prev in previas_con_saldo:
-                aplicado = aplicar_a_cuota(c_prev, monto)
-                monto -= aplicado
+                c.valor_pagado = (c.valor_pagado or Decimal('0.00')) + aplicar
+                c.estado = 'Pagada' if c.valor_pagado >= c.valor else 'Parcial'
+                c.save(update_fields=['valor_pagado', 'estado'])
+                return aplicar
+
+            distribucion = []
+            monto = valor
+
+            if previas_con_saldo and modo == 'auto':
+                for c_prev in previas_con_saldo:
+                    aplicado = aplicar_a_cuota(c_prev, monto)
+                    monto -= aplicado
+                    if aplicado > 0:
+                        distribucion.append({'cuota_id': c_prev.id, 'aplicado': str(aplicado)})
+                    if monto <= 0:
+                        break
+
+            if monto > 0:
+                aplicado = aplicar_a_cuota(cuota, monto)
                 if aplicado > 0:
-                    distribucion.append({'cuota_id': c_prev.id, 'aplicado': str(aplicado)})
-                if monto <= 0:
-                    break
+                    distribucion.append({'cuota_id': cuota.id, 'aplicado': str(aplicado)})
 
-        if monto > 0:
-            aplicado = aplicar_a_cuota(cuota, monto)
-            if aplicado > 0:
-                distribucion.append({'cuota_id': cuota.id, 'aplicado': str(aplicado)})
+            return JsonResponse({'ok': True, 'distribucion': distribucion})
 
-    return JsonResponse({'ok': True, 'distribucion': distribucion})
+    except _AbortarPago as ex:
+        return JsonResponse(ex.payload, status=ex.status)
+
+    except ConceptoIngreso.DoesNotExist:
+        return JsonResponse({
+            'ok': False,
+            'error': 'No existe ConceptoIngreso con pk=1 (configuración contable incompleta).'
+        }, status=500)
 
 @login_required
 @require_POST
@@ -772,195 +854,206 @@ def eliminar_pago(request):
 
 
 @login_required
-@transaction.atomic
 def nuevo_contrato(request):
-    # imports locales para pegar solo esta función
+    # =========================
+    # IMPORTS LOCALES (Opción A aplicada)
+    # =========================
     from django.utils.dateparse import parse_date
-    from django.db import IntegrityError
+    from django.db import IntegrityError, transaction
     from calendar import monthrange
     from datetime import date
     from decimal import Decimal, ROUND_HALF_UP
+    import re  # ✅ CORRECCIÓN APLICADA (Pylance / runtime)
 
-    # Helper: lee primero con prefijo y, si no existe, sin prefijo
+    # =========================
+    # Helpers
+    # =========================
+
     def _p(key_pref, key_plain, default=None):
         val = request.POST.get(key_pref)
         if val is None or val == "":
             val = request.POST.get(key_plain, default)
         return val
 
-    # Helper: sumar meses manteniendo “día de corte” y corrigiendo si el mes no lo tiene
     def add_months(d: date, months: int) -> date:
         y = d.year + (d.month - 1 + months) // 12
         m = (d.month - 1 + months) % 12 + 1
         last_day = monthrange(y, m)[1]
         return date(y, m, min(d.day, last_day))
 
-    # Helper: fecha de inicio = mes siguiente con día 5 o 20
     def compute_fecha_inicio_from_corte(corte: int) -> date:
         today = date.today()
-        # ir al primer día del mes siguiente
         y = today.year + (today.month // 12)
         m = (today.month % 12) + 1
         last_day = monthrange(y, m)[1]
-        dia = min(corte, last_day)  # por seguridad, aunque 5 y 20 siempre existen
+        dia = min(corte, last_day)
         return date(y, m, dia)
 
+    # Helper: normaliza COP "10.000.000" / "$ 10.000.000" / "10000000"
+    def cop_to_decimal(raw, default=Decimal('0.00')):
+        if raw is None:
+            return default
+        s = str(raw).strip()
+        if not s:
+            return default
+        s = s.replace("$", "").replace(" ", "")
+        digits = re.sub(r"[^\d]", "", s)
+        if digits == "":
+            return default
+        try:
+            return Decimal(digits)
+        except Exception:
+            return default
+
+    # =========================
+    # POST
+    # =========================
     if request.method == 'POST':
-        # Formularios alineados con tu HTML (usa prefijos)
+
         estudiante_form = EstudianteForm(request.POST, prefix='estudiante')
 
-        # =========================
-        # CONTRATO: forzar estado=Activo aunque no venga del form
-        # =========================
         post_contrato = request.POST.copy()
         if not post_contrato.get('estado'):
             post_contrato['estado'] = 'Activo'
         contrato_form = ContratoForm(post_contrato)
 
-        # ---------------------
-        # ACUDIENTE (reuso por documento)
-        # ---------------------
+        # ---- ACUDIENTE (lookup por documento) ----
         doc_acu = _p('acudiente-documento', 'documento', '')
-        acudiente = None
-
+        acudiente_existente = None
         if doc_acu:
-            acudiente = Acudiente.objects.filter(documento=doc_acu).first()
+            acudiente_existente = Acudiente.objects.filter(documento=doc_acu).first()
 
-        if acudiente:
+        if acudiente_existente:
             acudiente_form = AcudienteForm(prefix='acudiente')
         else:
             acudiente_form = AcudienteForm(request.POST, prefix='acudiente')
-            if acudiente_form.is_valid():
-                acudiente = acudiente_form.save()
-            else:
-                # si acudiente falla, no hay nada que “revertir” porque no guardamos estudiante/contrato aún
-                return render(request, 'nuevo_contrato.html', {
-                    'form_acudiente': acudiente_form,
-                    'form_estudiante': EstudianteForm(request.POST, prefix='estudiante'),
-                    'form_contrato':  contrato_form,
-                })
 
-        # ---------------------
-        # ESTUDIANTE
-        # ---------------------
-        if estudiante_form.is_valid():
-            estudiante = estudiante_form.save(commit=False)
-            estudiante.acudiente = acudiente
-            estudiante.save()
-        else:
-            try:
-                nombre     = _p('estudiante-nombre_completo', 'nombre_completo', '')
-                tipo_doc   = _p('estudiante-tipo_documento', 'tipo_documento', 'CC')
-                documento  = _p('estudiante-documento', 'documento', '')
-                fecha_nac  = parse_date(_p('estudiante-fecha_nacimiento', 'fecha_nacimiento', ''))
-                nivel_id   = _p('estudiante-nivel', 'nivel')
-                sede_id    = _p('estudiante-sede', 'sede')
-                estado     = _p('estudiante-estado', 'estado', 'Activo')
-                observ     = _p('estudiante-observacion', 'observacion', '')
-                horario_id = _p('estudiante-horario', 'horario')
-
-                estudiante, _ = Estudiante.objects.get_or_create(
-                    documento=documento,
-                    defaults={
-                        'nombre_completo': nombre,
-                        'tipo_documento': tipo_doc or 'CC',
-                        'fecha_nacimiento': fecha_nac,
-                        'nivel_id': nivel_id,
-                        'sede_id': sede_id,
-                        'estado': estado or 'Activo',
-                        'observacion': observ or '',
-                        'horario_id': (horario_id or None),
-                        'acudiente': acudiente,
-                    }
-                )
-
-                if estudiante.acudiente_id != acudiente.id:
-                    estudiante.acudiente = acudiente
-                    estudiante.save(update_fields=['acudiente'])
-
-            except IntegrityError as e:
-                estudiante_form.add_error(None, f'No se pudo crear el estudiante (integridad): {e}')
-                return render(request, 'nuevo_contrato.html', {
-                    'form_acudiente': acudiente_form,
-                    'form_estudiante': estudiante_form,
-                    'form_contrato': contrato_form,
-                })
-            except Exception as e:
-                estudiante_form.add_error(None, f'No se pudo crear el estudiante: {e}')
-                return render(request, 'nuevo_contrato.html', {
-                    'form_acudiente': acudiente_form,
-                    'form_estudiante': estudiante_form,
-                    'form_contrato': contrato_form,
-                })
-
-        # ---------------------
-        # CONTRATO
-        # ---------------------
-        # Evita segundo contrato para el mismo estudiante
-        if Contrato.objects.filter(estudiante=estudiante).exists():
-            contrato_form.add_error(None, 'Este estudiante ya tiene un contrato registrado.')
-            transaction.set_rollback(True)  # ✅ evita dejar estudiante sin contrato
+        # =========================
+        # VALIDACIONES
+        # =========================
+        if not acudiente_existente and not acudiente_form.is_valid():
+            messages.error(request, f"Acudiente inválido: {acudiente_form.errors}")
             return render(request, 'nuevo_contrato.html', {
                 'form_acudiente': acudiente_form,
                 'form_estudiante': estudiante_form,
                 'form_contrato': contrato_form,
             })
 
-        # Validación del form del contrato (normaliza valor_total y calcula cuota pactada)
-        if contrato_form.is_valid():
-            contrato = contrato_form.save(commit=False)
-            contrato.acudiente = acudiente
-            contrato.estudiante = estudiante
+        if not estudiante_form.is_valid():
+            messages.error(request, f"Estudiante inválido: {estudiante_form.errors}")
+            return render(request, 'nuevo_contrato.html', {
+                'form_acudiente': acudiente_form,
+                'form_estudiante': estudiante_form,
+                'form_contrato': contrato_form,
+            })
 
-            # -------- Día de corte (POST plano desde el <select name="dia_corte">) --------
-            try:
-                dia_corte = int((request.POST.get('dia_corte') or '5').strip())
-            except ValueError:
-                dia_corte = 5
-            if dia_corte not in (5, 20):
-                dia_corte = 5  # fallback defensivo
+        if not contrato_form.is_valid():
+            messages.error(request, f"Contrato inválido: {contrato_form.errors}")
+            return render(request, 'nuevo_contrato.html', {
+                'form_acudiente': acudiente_form,
+                'form_estudiante': estudiante_form,
+                'form_contrato': contrato_form,
+            })
 
-            # -------- Calcular fecha_inicio (mes siguiente) según 5/20. Ignora lo que venga en el form --------
-            fecha_inicio = compute_fecha_inicio_from_corte(dia_corte)
+        # =========================
+        # GUARDADO ATÓMICO
+        # =========================
+        try:
+            with transaction.atomic():
 
-            # -------- Cálculo robusto de cuota pactada y residuo (para cuadrar total) --------
-            total = Decimal(contrato.valor_total)
-            n     = int(contrato.numero_cuotas)
-            valor_base = (total / Decimal(n)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            residuo    = (total - (valor_base * n)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                # ACUDIENTE
+                if acudiente_existente:
+                    acudiente = acudiente_existente
+                else:
+                    acudiente = acudiente_form.save()
 
-            contrato.valor_cuota_pactada = valor_base
-            contrato.estado = 'Activo'          # ✅ blindaje definitivo
-            contrato.fecha_inicio = fecha_inicio
-            contrato.fecha_fin = add_months(fecha_inicio, n - 1)
+                # ESTUDIANTE
+                estudiante = estudiante_form.save(commit=False)
+                estudiante.acudiente = acudiente
+                estudiante.save()
 
-            contrato.save()
+                # CONTRATO (evitar duplicado)
+                if Contrato.objects.filter(estudiante=estudiante).exists():
+                    raise ValueError('Este estudiante ya tiene un contrato registrado.')
 
-            # -------- Generar cuotas mensuales con día de corte (+ residuo en la última) --------
-            for i in range(1, n + 1):
-                vence = add_months(fecha_inicio, i - 1)
-                valor_i = valor_base
-                if i == n and residuo != Decimal('0.00'):
-                    valor_i = (valor_base + residuo).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                contrato = contrato_form.save(commit=False)
+                contrato.acudiente = acudiente
+                contrato.estudiante = estudiante
 
-                Cuota.objects.create(
-                    contrato=contrato,
-                    numero=i,
-                    fecha_vencimiento=vence,
-                    valor=valor_i
-                )
+                # Día de corte
+                try:
+                    dia_corte = int((request.POST.get('dia_corte') or '5').strip())
+                except ValueError:
+                    dia_corte = 5
+                if dia_corte not in (5, 20):
+                    dia_corte = 5
+
+                fecha_inicio = compute_fecha_inicio_from_corte(dia_corte)
+
+                # =========================
+                # CÁLCULO CUOTAS (COP ENTEROS) basado en VALOR A FINANCIAR
+                # =========================
+                total = Decimal(contrato.valor_total)
+                n = int(contrato.numero_cuotas)
+
+                # cuota_inicial viene del HTML: name="cuota_inicial"
+                cuota_inicial = cop_to_decimal(request.POST.get('cuota_inicial'), default=Decimal('0'))
+                if cuota_inicial < 0:
+                    cuota_inicial = Decimal('0')
+
+                financiar = total - cuota_inicial
+                if financiar < 0:
+                    financiar = Decimal('0')
+
+                # ✅ CUOTA BASE ENTERA (sin decimales)
+                valor_base = (financiar / Decimal(n)).to_integral_value(rounding=ROUND_HALF_UP)
+
+                # ✅ Residuo exacto (entero) para cuadrar la suma total
+                residuo = financiar - (valor_base * n)
+
+                # Guardamos en contrato la cuota pactada (entera) y fechas
+                contrato.valor_cuota_pactada = valor_base
+                contrato.estado = 'Activo'
+                contrato.fecha_inicio = fecha_inicio
+                contrato.fecha_fin = add_months(fecha_inicio, n - 1)
+                contrato.save()
+
+                # =========================
+                # CUOTAS (COP ENTEROS) basadas en financiar
+                # =========================
+                for i in range(1, n + 1):
+                    vence = add_months(fecha_inicio, i - 1)
+                    valor_i = valor_base
+
+                    # ✅ Ajuste del residuo solo en la última cuota
+                    if i == n and residuo != Decimal('0'):
+                        valor_i = valor_base + residuo
+
+                    Cuota.objects.create(
+                        contrato=contrato,
+                        numero=i,
+                        fecha_vencimiento=vence,
+                        valor=valor_i
+                    )
 
             return redirect('listar_estudiantes')
 
-        # ❌ Si el contrato no valida, rollback para no dejar estudiante huérfano
-        transaction.set_rollback(True)
+        except ValueError as e:
+            contrato_form.add_error(None, str(e))
+        except IntegrityError as e:
+            contrato_form.add_error(None, f'Error de integridad: {e}')
+        except Exception as e:
+            contrato_form.add_error(None, f'No se pudo crear el contrato: {e}')
+
         return render(request, 'nuevo_contrato.html', {
             'form_acudiente': acudiente_form,
             'form_estudiante': estudiante_form,
             'form_contrato': contrato_form,
         })
 
-    # GET → formularios vacíos con los mismos prefijos que usa el HTML
+    # =========================
+    # GET
+    # =========================
     return render(request, 'nuevo_contrato.html', {
         'form_acudiente': AcudienteForm(prefix='acudiente'),
         'form_estudiante': EstudianteForm(prefix='estudiante'),

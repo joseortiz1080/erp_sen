@@ -181,12 +181,38 @@ class Cuota(models.Model):
     def __str__(self):
         return f"Cuota {self.numero} de contrato {self.contrato.id}"
 
+class MedioPago(models.Model):
+    nombre = models.CharField(max_length=100, unique=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'gestion_finanzas_medio_pago'
+        managed = False
+
+    def __str__(self):
+        return self.nombre
 
 class Pago(models.Model):
-    contrato = models.ForeignKey(Contrato, on_delete=models.CASCADE)
+    contrato = models.ForeignKey(
+        Contrato,
+        on_delete=models.CASCADE
+    )
 
-    # LEGACY: se mantiene para no romper pantallas que aún lo usan.
-    # Con el nuevo esquema, la relación a cuotas va por PagoAplicacion.
+    # =========================
+    # NUEVO (OFICIAL)
+    # =========================
+    medio_pago = models.ForeignKey(
+        MedioPago,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column='medio_pago_id',
+        related_name='pagos'
+    )
+
+    # =========================
+    # LEGACY (NO TOCAR AÚN)
+    # =========================
     cuota = models.ForeignKey(
         Cuota,
         on_delete=models.CASCADE,
@@ -198,19 +224,37 @@ class Pago(models.Model):
 
     fecha_pago = models.DateField(db_index=True)
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
-
-    FORMA_PAGO = [
-        ('Efectivo', 'Efectivo'),
-        ('Transferencia', 'Transferencia'),
-        ('Banco', 'Banco'),
-        ('Nequi', 'Nequi'),
-        ('Otro', 'Otro'),
-    ]
-    forma_pago = models.CharField(max_length=50, choices=FORMA_PAGO)
+    forma_pago = models.CharField(max_length=50)
+    # LEGACY — se eliminará después
+#    FORMA_PAGO = [
+#('Efectivo', 'Efectivo'),
+ #       ('Transferencia', 'Transferencia'),
+  #      ('Banco', 'Banco'),
+   #     ('Nequi', 'Nequi'),
+    #    ('Otro', 'Otro'),
+    #]
+    
+    #forma_pago = models.CharField(
+     #   max_length=50,
+      #  choices=FORMA_PAGO,
+       # help_text='[LEGACY] No usar en nuevo flujo'
+    #)
+    
+    
 
     observacion = models.TextField(blank=True, null=True)
-    referencia = models.CharField(max_length=100, db_index=True)  # soporte/txn/recibo (cabecera)
-    numero_factura = models.CharField(max_length=30, blank=True, null=True, db_index=True)
+    referencia = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text='Soporte / recibo / referencia'
+    )
+
+    numero_factura = models.CharField(
+        max_length=30,
+        blank=True,
+        null=True,
+        db_index=True
+    )
 
     class Meta:
         db_table = 'gestion_clientes_pago'
@@ -219,19 +263,20 @@ class Pago(models.Model):
             models.Index(fields=['fecha_pago']),
             models.Index(fields=['numero_factura']),
             models.Index(fields=['referencia']),
+            models.Index(fields=['medio_pago']),
         ]
 
     def clean(self):
-        # Validaciones mínimas para coherencia legacy
+        from django.core.exceptions import ValidationError
+
         if self.cuota and self.cuota.contrato_id != self.contrato_id:
-            from django.core.exceptions import ValidationError
             raise ValidationError("La cuota seleccionada no pertenece a este contrato.")
+
         if self.valor_pagado is None or self.valor_pagado <= Decimal('0'):
-            from django.core.exceptions import ValidationError
             raise ValidationError("El valor del pago debe ser mayor a cero.")
 
     def __str__(self):
-        return f"{self.fecha_pago} - ${self.valor_pagado}"
+        return f"Pago #{self.id} | {self.fecha_pago} | ${self.valor_pagado}"
 
 
 class PagoAplicacion(models.Model):
@@ -267,6 +312,18 @@ class PagoAplicacion(models.Model):
     def __str__(self):
         return f"Pago #{self.pago_id} → Cuota #{self.cuota_id}: ${self.monto}"
 
+class ConceptoIngreso(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    nombre = models.CharField(max_length=120, unique=True)
+    activo = models.BooleanField(default=True)
+    created_at = models.DateTimeField(db_column='created_at')
+
+    class Meta:
+        db_table = 'gestion_finanzas_concepto_ingreso'
+        managed = False
+
+    def __str__(self):
+        return self.nombre
 
 class Ingreso(models.Model):
     TIPOS_REGISTRO = [
@@ -275,11 +332,32 @@ class Ingreso(models.Model):
     ]
 
     id = models.BigAutoField(primary_key=True)
-    sede = models.ForeignKey('gestion_clientes.Sede', on_delete=models.PROTECT, db_column='sede_id')
-    tipo_ingreso = models.CharField(max_length=50)
+
+    sede = models.ForeignKey(
+        'gestion_clientes.Sede',
+        on_delete=models.PROTECT,
+        db_column='sede_id'
+    )
+
+    # ===============================
+    # 🔹 CONCEPTO CONTABLE DEL INGRESO
+    # ===============================
+    concepto_ingreso = models.ForeignKey(
+        'gestion_clientes.ConceptoIngreso',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column='concepto_ingreso_id',
+        related_name='ingresos'
+    )
+
+    # Texto libre legacy (no se elimina)
+    #tipo_ingreso = models.CharField(max_length=50)
+
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
     fecha_pago = models.DateField()
     forma_pago = models.CharField(max_length=50)
+
     referencia = models.CharField(max_length=100, null=True, blank=True)
     observacion = models.TextField(null=True, blank=True)
 
@@ -291,18 +369,41 @@ class Ingreso(models.Model):
     )
 
     usuario_registro = models.ForeignKey(
-        User, on_delete=models.PROTECT, db_column='usuario_registro_id'
+        User,
+        on_delete=models.PROTECT,
+        db_column='usuario_registro_id'
     )
+
     pago = models.ForeignKey(
-        'gestion_clientes.Pago', on_delete=models.SET_NULL, null=True, blank=True, db_column='pago_id'
+        'gestion_clientes.Pago',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='pago_id'
     )
+
     contrato = models.ForeignKey(
-        'gestion_clientes.Contrato', on_delete=models.SET_NULL, null=True, blank=True, db_column='contrato_id'
+        'gestion_clientes.Contrato',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='contrato_id'
     )
+
     cuota = models.ForeignKey(
-        'gestion_clientes.Cuota', on_delete=models.SET_NULL, null=True, blank=True, db_column='cuota_id'
+        'gestion_clientes.Cuota',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='cuota_id'
     )
-    numero_factura = models.CharField(max_length=30, null=True, blank=True, db_column='numero_factura')
+
+    numero_factura = models.CharField(
+        max_length=30,
+        null=True,
+        blank=True,
+        db_column='numero_factura'
+    )
 
     creado_en = models.DateTimeField(auto_now_add=True, db_column='creado_en')
     actualizado_en = models.DateTimeField(auto_now=True, db_column='actualizado_en')
@@ -314,8 +415,7 @@ class Ingreso(models.Model):
         verbose_name_plural = 'Ingresos'
 
     def __str__(self):
-        return f"{self.tipo_ingreso} - {self.valor_pagado} ({self.fecha_pago})"
-
+        return f"Ingreso #{self.id} - {self.valor_pagado} ({self.fecha_pago})"
 class Perfil(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
 
@@ -332,3 +432,4 @@ class Perfil(models.Model):
 
     def __str__(self):
         return self.user.username
+    
