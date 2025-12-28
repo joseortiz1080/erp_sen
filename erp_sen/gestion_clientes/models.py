@@ -202,12 +202,11 @@ class Pago(models.Model):
     # NUEVO (OFICIAL)
     # =========================
     medio_pago = models.ForeignKey(
-        MedioPago,
+        'gestion_clientes.MedioPago',
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        db_column='medio_pago_id',
-        related_name='pagos'
+        db_column='medio_pago_id'
     )
 
     # =========================
@@ -224,24 +223,6 @@ class Pago(models.Model):
 
     fecha_pago = models.DateField(db_index=True)
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
-    forma_pago = models.CharField(max_length=50)
-    # LEGACY — se eliminará después
-#    FORMA_PAGO = [
-#('Efectivo', 'Efectivo'),
- #       ('Transferencia', 'Transferencia'),
-  #      ('Banco', 'Banco'),
-   #     ('Nequi', 'Nequi'),
-    #    ('Otro', 'Otro'),
-    #]
-    
-    #forma_pago = models.CharField(
-     #   max_length=50,
-      #  choices=FORMA_PAGO,
-       # help_text='[LEGACY] No usar en nuevo flujo'
-    #)
-    
-    
-
     observacion = models.TextField(blank=True, null=True)
     referencia = models.CharField(
         max_length=100,
@@ -356,7 +337,7 @@ class Ingreso(models.Model):
 
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
     fecha_pago = models.DateField()
-    forma_pago = models.CharField(max_length=50)
+    #forma_pago = models.CharField(max_length=50)
 
     referencia = models.CharField(max_length=100, null=True, blank=True)
     observacion = models.TextField(null=True, blank=True)

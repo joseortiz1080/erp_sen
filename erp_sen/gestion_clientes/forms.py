@@ -4,7 +4,7 @@ from django.utils import timezone
 import re
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
-from .models import Acudiente, Estudiante, Contrato, Ingreso, Sede
+from .models import Acudiente, Estudiante, Contrato, Ingreso, Sede, MedioPago
 
 
 # ==========================================================
@@ -279,29 +279,32 @@ class ContratoForm(forms.ModelForm):
 #  INGRESO
 # ==========================================================
 class IngresoForm(forms.ModelForm):
+
+    medio_pago = forms.ModelChoiceField(
+        queryset=MedioPago.objects.filter(activo=True).order_by('nombre'),
+        required=True,
+        widget=forms.Select(attrs={'class': 'form-select'})
+    )
+
     class Meta:
         model = Ingreso
-        fields = ['fecha_pago', 'valor_pagado', 'forma_pago',
+        fields = ['fecha_pago', 'valor_pagado', 'medio_pago',
                 'observacion', 'referencia', 'numero_factura', 'sede']
+
         labels = {
             'fecha_pago': 'Fecha',
             'valor_pagado': 'Valor',
-            'forma_pago': 'Método',
+            'medio_pago': 'Medio de pago',
             'observacion': 'Observación',
             'referencia': 'Referencia / Recibo',
             'numero_factura': 'Factura',
             'sede': 'Sede',
         }
+
         widgets = {
             'fecha_pago': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
             'valor_pagado': forms.NumberInput(attrs={'class': 'form-control', 'min': '0', 'step': '0.01'}),
-            'forma_pago': forms.Select(choices=[
-                ('Efectivo', 'Efectivo'),
-                ('Banco', 'Banco'),
-                ('Transferencia', 'Transferencia'),
-                ('Nequi', 'Nequi'),
-                ('Otro', 'Otro'),
-            ], attrs={'class': 'form-select'}),
+            'medio_pago': forms.Select(attrs={'class': 'form-select'}),
             'observacion': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
             'referencia': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'No. remisión / recibo'}),
             'numero_factura': forms.TextInput(attrs={'class': 'form-control'}),

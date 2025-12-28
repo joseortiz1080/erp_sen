@@ -593,21 +593,14 @@ def aplicar_pago(request):
     fecha_str = (request.POST.get('fecha_pago') or '').strip()
     modo = (request.POST.get('modo') or '').strip()  # '', 'auto'
     fecha_pago = parse_date(fecha_str) if fecha_str else now().date()
-    forma_pago_txt = (request.POST.get('forma_pago') or '').strip()
+    medio_pago_id = (request.POST.get('medio_pago_id') or request.POST.get('medio_pago') or '').strip()
 
-    if not forma_pago_txt:
+    if not medio_pago_id:
         return JsonResponse({'ok': False, 'error': 'Debe seleccionar un medio de pago.'}, status=400)
 
-    medio_pago = MedioPago.objects.filter(
-        nombre__iexact=forma_pago_txt,
-        activo=True
-    ).first()
-
+    medio_pago = MedioPago.objects.filter(id=medio_pago_id, activo=True).first()
     if not medio_pago:
-        return JsonResponse(
-            {'ok': False, 'error': 'Medio de pago no válido o inactivo.'},
-            status=400
-        )
+        return JsonResponse({'ok': False, 'error': 'Medio de pago no válido o inactivo.'}, status=400)
     
     if not cuota_id:
         return JsonResponse({'ok': False, 'error': 'Falta cuota_id.'}, status=400)
@@ -633,22 +626,6 @@ def aplicar_pago(request):
 
     if valor <= 0:
         return JsonResponse({'ok': False, 'error': 'El valor debe ser mayor a cero.'}, status=400)
-
-    forma_pago_txt = (request.POST.get('forma_pago') or '').strip()
-
-    if not forma_pago_txt:
-        return JsonResponse({'ok': False, 'error': 'Debe seleccionar un medio de pago.'}, status=400)
-
-    medio_pago = MedioPago.objects.filter(
-        nombre__iexact=forma_pago_txt,
-        activo=True
-    ).first()
-
-    if not medio_pago:
-        return JsonResponse(
-            {'ok': False, 'error': 'Medio de pago no válido o inactivo.'},
-            status=400
-        )
 
     # =====================================================
     # Validación previa (FUERA del atomic) para evitar returns dentro de la transacción
@@ -724,14 +701,9 @@ def aplicar_pago(request):
             def registrar_ingreso(cuota_obj, aplicar_monto, pago_obj, fecha_pago, usuario, numero_factura):
                 Ingreso.objects.create(
                     sede=cuota_obj.contrato.estudiante.sede,
-                    #estudiante=cuota_obj.contrato.estudiante,
                     concepto_ingreso=ConceptoIngreso.objects.get(pk=1),
-
                     valor_pagado=aplicar_monto,
                     fecha_pago=fecha_pago,
-
-                    forma_pago=medio_pago.nombre,
-
                     referencia=referencia or None,
                     observacion=observacion or None,
                     tipo_registro='pago_cuota',

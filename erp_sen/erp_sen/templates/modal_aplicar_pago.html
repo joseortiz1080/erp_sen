@@ -64,9 +64,11 @@
             </div>
             <div class="col-md-3">
               <label class="form-label">Forma de pago</label>
-            <select class="form-select" name="forma_pago" id="mp-forma" required>
-              <option value="" selected disabled>Cargando medios...</option>
-            </select>
+              <select class="form-select" name="medio_pago_id" id="mp-medio"
+                      data-medios-url="{% url 'listar_medios_pago' %}"
+                      required>
+                <option value="" selected disabled>Seleccione...</option>
+              </select>
             </div>
             <div class="col-md-3">
               <label class="form-label">N° factura (opcional)</label>

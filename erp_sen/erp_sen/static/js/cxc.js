@@ -42,7 +42,7 @@
   const fPagadoTxt  = document.getElementById('mp-pagado');
   const fSaldoTxt   = document.getElementById('mp-saldo');
   const fFecha      = document.getElementById('mp-fecha');
-  const fForma      = document.getElementById('mp-forma');
+  const fForma      = document.getElementById('mp-medio');
   const fFactura    = document.getElementById('mp-factura');
   const fReferencia = document.getElementById('mp-referencia');
   const fValorPay   = document.getElementById('mp-valor-pagar');
@@ -109,8 +109,8 @@ async function cargarMedios() {
     }
 
     // opciones
-    fForma.innerHTML = '<option value="">Seleccione…</option>' +
-      data.medios.map(m => `<option value="${m.nombre}">${m.nombre}</option>`).join('');
+  fForma.innerHTML = '<option value="">Seleccione…</option>' +
+  data.medios.map(m => `<option value="${m.id}">${m.nombre}</option>`).join('');
 
     mediosCargados = true;
 
@@ -151,7 +151,7 @@ async function cargarMedios() {
       } else {
         tbodyHist.innerHTML = data.pagos.map((p, i) => {
           const valor = formatCOP(p.valor_pagado);
-          const medio = p.forma_pago || '—';
+          const medio = p.medio_pago || '—';
           const fac   = p.numero_factura || '—';
           const ref   = p.referencia || '—';
           const obs   = p.observacion || '';
