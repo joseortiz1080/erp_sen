@@ -17,9 +17,10 @@ from django.views.decorators.http import require_POST, require_GET
 
 from .forms import AcudienteForm, EstudianteForm, ContratoForm, IngresoForm
 from .models import (
-    Estudiante, Contrato, Cuota, Ingreso, Pago, Nivel, Horario, Sede, Acudiente,
-    MedioPago, ConceptoIngreso
+    Estudiante, Contrato, Cuota, Ingreso, Nivel, Horario, Sede, Acudiente,
+    MedioPago, ConceptoIngreso, PagoAplicacion, ConsecutivoComprobante
 )
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 @require_GET
 @login_required
@@ -66,6 +67,7 @@ def vista_inicial(request):
     return render(request, 'inicio.html')
 
 
+@ensure_csrf_cookie
 def login_view(request):
     if request.method == 'POST':
         username = request.POST.get('username') or ''
@@ -73,23 +75,66 @@ def login_view(request):
         user = authenticate(request, username=username, password=password)
         if user is not None:
             login(request, user)
-            return redirect('vista_inicial')  # TODO: redirigir según rol
+            return redirect('vista_inicial')
         return render(request, 'login.html', {'error': True})
     return render(request, 'login.html')
 
+def generar_rc(request, sede):
+    """
+    Genera un número de comprobante RC único por:
+    - sede
+    - año
+    Formato:
+    RC-SEDE-AÑO-XXXXXXXX
+    """
+    if sede is None:
+        raise ValueError('generar_rc: sede no puede ser None')
+    year = now().year
+    prefijo = 'RC'
+
+    with transaction.atomic():
+        consecutivo_obj, created = (
+            ConsecutivoComprobante.objects
+            .select_for_update()
+            .get_or_create(
+                sede_id=sede.id,
+                prefijo=prefijo,
+                year=year,
+                defaults={'consecutivo': 0}
+            )
+        )
+
+        consecutivo_obj.consecutivo += 1
+        consecutivo_obj.save(update_fields=['consecutivo'])
+
+        rc = f"{prefijo}-{sede.id}-{year}-{str(consecutivo_obj.consecutivo).zfill(8)}"
+        return rc
 
 @login_required
 def dashboard_view(request):
     return render(request, 'dashboard.html')
 
 
-from django.db.models import Count, IntegerField, DecimalField, Value, F, Sum, OuterRef, Subquery
-from django.db.models.functions import Coalesce
-from decimal import Decimal
-from django.utils.timezone import now
 
 @login_required
 def listar_estudiantes(request):
+    hoy = now().date()
+    sede_ids = user_sede_ids(request.user)
+
+    # --------- Parámetros de filtro (mismo estándar de /cxc/) ---------
+    q_text = (request.GET.get('q') or '').strip()
+    nivel_id = (request.GET.get('nivel') or '').strip()
+    horario_id = (request.GET.get('horario') or '').strip()
+    sede_id = (request.GET.get('sede') or '').strip() if not sede_ids else ''
+    mora = (request.GET.get('mora') or '').strip()  # 'si' / 'no' / ''
+
+    try:
+        per_page = int(request.GET.get('per_page', 50))
+    except ValueError:
+        per_page = 50
+    page = request.GET.get('page', 1)
+
+    # --------- Subqueries/KPIs por estudiante ---------
     contrato_valor_sq = Subquery(
         Contrato.objects
         .filter(estudiante_id=OuterRef('pk'))
@@ -118,7 +163,18 @@ def listar_estudiantes(request):
 
     cuotas_vencidas_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Vencida')
+        .filter(contrato__estudiante_id=OuterRef('pk'))
+        .annotate(
+            pagado=Coalesce(
+                Sum(
+                    'aplicaciones__valor_aplicado',
+                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                ),
+                Value(Decimal('0.00'))
+            )
+        )
+        .annotate(saldo=F('valor') - F('pagado'))
+        .filter(fecha_vencimiento__lt=hoy, saldo__gt=0)
         .values('contrato__estudiante_id')
         .annotate(cnt=Count('id'))
         .values('cnt')[:1],
@@ -126,10 +182,10 @@ def listar_estudiantes(request):
     )
 
     total_pagado_sq = Subquery(
-        Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'))
-        .values('contrato__estudiante_id')
-        .annotate(total=Coalesce(Sum('valor_pagado'), Value(Decimal('0.00'))))
+        PagoAplicacion.objects
+        .filter(cuota__contrato__estudiante_id=OuterRef('pk'), ingreso__estado='ACTIVO')
+        .values('cuota__contrato__estudiante_id')
+        .annotate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
         .values('total')[:1],
         output_field=DecimalField(max_digits=12, decimal_places=2)
     )
@@ -138,8 +194,17 @@ def listar_estudiantes(request):
         Cuota.objects
         .filter(contrato__estudiante_id=OuterRef('pk'))
         .values('contrato__estudiante_id')
-        .annotate(saldo=Coalesce(Sum(F('valor') - F('valor_pagado')),
-                                Value(Decimal('0.00'))))
+        .annotate(
+            total_valor=Coalesce(Sum('valor'), Value(Decimal('0.00'))),
+            total_pagado=Coalesce(
+                Sum(
+                    'aplicaciones__valor_aplicado',
+                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                ),
+                Value(Decimal('0.00'))
+            ),
+        )
+        .annotate(saldo=F('total_valor') - F('total_pagado'))
         .values('saldo')[:1],
         output_field=DecimalField(max_digits=12, decimal_places=2)
     )
@@ -160,34 +225,92 @@ def listar_estudiantes(request):
         .values('fecha_vencimiento')[:1]
     )
 
-    estudiantes = (
+    # --------- Base queryset ---------
+    qs = (
         Estudiante.objects
         .select_related('nivel', 'sede', 'acudiente', 'horario')
         .annotate(
-            # ya definidos:
             contrato_valor=Coalesce(contrato_valor_sq, Value(Decimal('0.00'))),
             numero_cuotas=Coalesce(numero_cuotas_sq, Value(0)),
             cuotas_pagadas=Coalesce(cuotas_pagadas_sq, Value(0)),
             cuotas_vencidas=Coalesce(cuotas_vencidas_sq, Value(0)),
             total_pagado=Coalesce(total_pagado_sq, Value(Decimal('0.00'))),
             saldo_total=Coalesce(saldo_total_sq, Value(Decimal('0.00'))),
-
-            # NUEVO:
             cuotas_parciales=Coalesce(cuotas_parciales_sq, Value(0)),
-
             proximo_vto=proximo_vto_sq,
-            
             estado_cartera=Case(
-            When(cuotas_vencidas__gt=0, then=Value('En mora')),
-            default=Value('Al día'),
-            output_field=models.CharField()
-),
+                When(cuotas_vencidas__gt=0, then=Value('En mora')),
+                default=Value('Al día'),
+                output_field=models.CharField(max_length=20)
+            ),
         )
-        
         .order_by('-id')
     )
 
-    return render(request, 'listar_estudiantes.html', {'estudiantes': estudiantes})
+    # --------- Seguridad por sede ---------
+    if sede_ids:
+        qs = qs.filter(sede_id__in=sede_ids)
+
+    # --------- Filtro texto libre (estudiante/acudiente/documento) ---------
+    if q_text:
+        filtros = (
+            Q(nombre_completo__icontains=q_text) |
+            Q(documento__icontains=q_text) |
+            Q(acudiente__nombre_completo__icontains=q_text) |
+            Q(acudiente__documento__icontains=q_text)
+        )
+
+        # Si es numérico, permitir búsqueda directa por ID del estudiante
+        if q_text.isdigit():
+            qs = qs.filter(Q(id=int(q_text)) | filtros)
+        else:
+            qs = qs.filter(filtros)
+
+    # --------- Nivel / Horario ---------
+    if nivel_id:
+        qs = qs.filter(nivel_id=nivel_id)
+    if horario_id:
+        qs = qs.filter(horario_id=horario_id)
+
+    # --------- Mora (estado cartera) ---------
+    if mora == 'si':
+        qs = qs.filter(cuotas_vencidas__gt=0)
+    elif mora == 'no':
+        qs = qs.filter(cuotas_vencidas__lte=0)
+
+    # --------- Sede desde GET (solo si NO hay restricción previa) ---------
+    if sede_id:
+        qs = qs.filter(sede_id=sede_id)
+
+    # --------- Catálogos ---------
+    niveles = Nivel.objects.all().order_by('nombre')
+    horarios = Horario.objects.all().order_by('descripcion')
+    sedes = [] if sede_ids else list(Sede.objects.all().order_by('nombre'))
+
+    # --------- Paginación ---------
+    paginator = Paginator(qs, per_page)
+    page_obj = paginator.get_page(page)
+
+    context = {
+        'estudiantes': page_obj.object_list,
+        'page_obj': page_obj,
+        'paginator': paginator,
+
+        # filtros activos
+        'q': q_text,
+        'nivel_id': nivel_id,
+        'horario_id': horario_id,
+        'mora': mora,
+        'sede_id': sede_id,
+        'per_page': per_page,
+
+        # catálogos
+        'niveles': niveles,
+        'horarios': horarios,
+        'sedes': sedes,
+    }
+
+    return render(request, 'listar_estudiantes.html', context)
 
 
 @login_required
@@ -220,7 +343,10 @@ def detalle_estudiante(request, id):
             .filter(contrato=contrato_activo)
             .annotate(
                 pagado=Coalesce(
-                    Sum('pagos__valor_pagado'),
+                    Sum(
+                        'aplicaciones__valor_aplicado',
+                        filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                    ),
                     Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2)
                 ),
@@ -269,28 +395,27 @@ def detalle_estudiante(request, id):
         )
 
         total_pagado = (
-            Pago.objects
-            .filter(contrato=contrato_activo)
-            .aggregate(total=Coalesce(Sum('valor_pagado'), Value(Decimal('0.00'))))
+            PagoAplicacion.objects
+            .filter(cuota__contrato=contrato_activo, ingreso__estado='ACTIVO')
+            .aggregate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
         )['total']
 
         # ✅ ESTA LÍNEA ES LA QUE TE FALTA
         kpis['total_pagado'] = total_pagado or Decimal('0.00')
 
-        ultimo_pago = (
-            Pago.objects
-            .filter(contrato=contrato_activo)
-            .order_by('-fecha_pago', '-id')
-            .values('fecha_pago', 'valor_pagado', 'medio_pago__nombre')[:1]
+        ultimo_ap = (
+            PagoAplicacion.objects
+            .filter(cuota__contrato=contrato_activo, ingreso__estado='ACTIVO')
+            .select_related('ingreso')
+            .order_by('-ingreso__fecha_pago', '-ingreso_id')
+            .values('ingreso__fecha_pago', 'ingreso__valor_pagado', 'forma_pago')[:1]
         )
 
-        if ultimo_pago:
-            up = ultimo_pago[0]
-            medio = up.get('medio_pago__nombre') or ''
-
-            kpis['ultimo_pago_fecha'] = up['fecha_pago']
-            kpis['ultimo_pago_valor'] = up['valor_pagado']
-            kpis['ultimo_pago_medio'] = medio
+        if ultimo_ap:
+            up = ultimo_ap[0]
+            kpis['ultimo_pago_fecha'] = up['ingreso__fecha_pago']
+            kpis['ultimo_pago_valor'] = up['ingreso__valor_pagado']
+            kpis['ultimo_pago_medio'] = (up.get('forma_pago') or '').strip()
 
     return render(request, 'detalle_estudiante.html', {
         'estudiante': estudiante,
@@ -311,13 +436,20 @@ def listado_cxc(request):
     hoy = now().date()
     sede_ids = user_sede_ids(request.user)
 
-    # --------- Subqueries: último pago por cuota (legacy) ---------
-    pagos_ordenados = Pago.objects.filter(cuota_id=OuterRef('pk')).order_by('-fecha_pago', '-id')
-    ultimo_pago_fecha      = Subquery(pagos_ordenados.values('fecha_pago')[:1])
-    ultimo_pago_medio      = Subquery(pagos_ordenados.values('medio_pago__nombre')[:1])
-    ultimo_pago_obs        = Subquery(pagos_ordenados.values('observacion')[:1])
-    ultimo_pago_factura    = Subquery(pagos_ordenados.values('numero_factura')[:1])
-    ultimo_pago_referencia = Subquery(pagos_ordenados.values('referencia')[:1])  # NUEVO
+
+# --------- Subqueries: último ingreso/aplicación por cuota (PRO) ---------
+    apps_ordenadas = (
+        PagoAplicacion.objects
+        .filter(cuota_id=OuterRef('pk'), ingreso__estado='ACTIVO')
+        .select_related('ingreso')
+        .order_by('-ingreso__fecha_pago', '-ingreso_id')
+    )
+
+    ultimo_pago_fecha      = Subquery(apps_ordenadas.values('ingreso__fecha_pago')[:1])
+    ultimo_pago_medio      = Subquery(apps_ordenadas.values('forma_pago')[:1])  # ✅ aquí, NO observacion
+    ultimo_pago_obs        = Subquery(apps_ordenadas.values('ingreso__observacion')[:1])
+    ultimo_pago_factura    = Subquery(apps_ordenadas.values('ingreso__numero_factura')[:1])
+    ultimo_pago_referencia = Subquery(apps_ordenadas.values('ingreso__referencia')[:1])
 
     # --------- Base queryset ---------
     qs = (
@@ -332,8 +464,11 @@ def listado_cxc(request):
         )
         .annotate(
             pagado=Coalesce(
-                Sum('pagos__valor_pagado'),
-                Value(Decimal('0.00'), output_field=DecimalField())
+                Sum(
+                    'aplicaciones__valor_aplicado',
+                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                ),
+                Value(Decimal('0.00'), output_field=DecimalField(max_digits=12, decimal_places=2))
             ),
             ultimo_pago_fecha=ultimo_pago_fecha,
             ultimo_pago_medio=ultimo_pago_medio,
@@ -369,17 +504,24 @@ def listado_cxc(request):
     # Si el usuario NO está restringido por sede_ids, se permite filtrar por sede desde GET
     sede_id    = (request.GET.get('sede') or '').strip() if not sede_ids else ''
 
-    # Texto libre (incluye referencia)
+    # Texto libre (incluye documento, nombres, contrato, RC, factura, referencia)
     if q_text:
         filtros = (
+            # Estudiante
             Q(contrato__estudiante__nombre_completo__icontains=q_text) |
             Q(contrato__estudiante__documento__icontains=q_text) |
-            Q(contrato__estudiante__acudiente__documento__icontains=q_text) |
+
+            # Acudiente
             Q(contrato__estudiante__acudiente__nombre_completo__icontains=q_text) |
-            Q(pagos__numero_factura__icontains=q_text) |
-            Q(pagos__referencia__icontains=q_text)
+            Q(contrato__estudiante__acudiente__documento__icontains=q_text) |
+
+            # Factura / Referencia / RC (cabecera Ingreso)
+            Q(aplicaciones__ingreso__numero_factura__icontains=q_text) |
+            Q(aplicaciones__ingreso__referencia__icontains=q_text) |
+            Q(aplicaciones__ingreso__numero_comprobante__icontains=q_text)
         )
-        # (C) mejorar manejo cuando q es numérico (posible contrato_id)
+
+        # Si es numérico, permitir también búsqueda directa por ID de contrato
         if q_text.isdigit():
             qs = qs.filter(Q(contrato_id=int(q_text)) | filtros).distinct()
         else:
@@ -400,25 +542,34 @@ def listado_cxc(request):
     if fv_hasta:
         qs = qs.filter(fecha_vencimiento__lte=fv_hasta)
 
-    # Medio
+    # Medio (PRO): viene de PagoAplicacion.forma_pago y/o Ingreso.medio_pago.nombre
     if medio:
         qs = qs.annotate(tiene_medio=Exists(
-            Pago.objects.filter(
+            PagoAplicacion.objects.filter(
                 cuota_id=OuterRef('pk'),
-                medio_pago__nombre__iexact=medio
+                ingreso__estado='ACTIVO'
+            ).filter(
+                Q(forma_pago__icontains=medio) |
+                Q(ingreso__medio_pago__nombre__icontains=medio)
             )
         )).filter(tiene_medio=True)
 
     # Factura
     if factura:
         qs = qs.annotate(tiene_factura=Exists(
-            Pago.objects.filter(cuota_id=OuterRef('pk'), numero_factura__icontains=factura)
+            PagoAplicacion.objects.filter(
+                cuota_id=OuterRef('pk'),
+                ingreso__numero_factura__icontains=factura
+            )
         )).filter(tiene_factura=True)
 
     # Referencia
     if referencia:
         qs = qs.annotate(tiene_referencia=Exists(
-            Pago.objects.filter(cuota_id=OuterRef('pk'), referencia__icontains=referencia)
+            PagoAplicacion.objects.filter(
+                cuota_id=OuterRef('pk'),
+                ingreso__referencia__icontains=referencia
+            )
         )).filter(tiene_referencia=True)
 
     # Con pago / sin pago
@@ -512,7 +663,10 @@ def aplicar_pago(request):
             .filter(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
             .annotate(
                 pagado=Coalesce(
-                    Sum('pagos__valor_pagado'),
+                    Sum(
+                        'aplicaciones__valor_aplicado',
+                        filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                    ),
                     Value(Decimal('0.00')),
                     output_field=DecimalField(max_digits=12, decimal_places=2)
                 ),
@@ -534,6 +688,17 @@ def aplicar_pago(request):
         ]
 
     # =====================================================
+    # Helper: saldo REAL (vía PagoAplicacion) para validaciones fuera del atomic
+    # =====================================================
+    def saldo_real_fuera_atomic(cuota_obj):
+        pagado_real = (
+            PagoAplicacion.objects
+            .filter(cuota_id=cuota_obj.id, ingreso__estado='ACTIVO')
+            .aggregate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
+        )['total'] or Decimal('0.00')
+        return (cuota_obj.valor or Decimal('0.00')) - pagado_real
+
+    # =====================================================
     # GET → historial de pagos (modal)
     # =====================================================
     if request.method == 'GET':
@@ -545,41 +710,109 @@ def aplicar_pago(request):
         if resp_error:
             return resp_error
 
-        pagos_qs = (
-            Pago.objects
-            .filter(cuota_id=cuota.id)
-            .order_by('fecha_pago', 'id')
-            .values(
-                'id',
-                'fecha_pago',
-                'valor_pagado',
-                'medio_pago__nombre',
-                'numero_factura',
-                'referencia',
-                'observacion'
-            )
+        # Historial: el JS (cxc.js) espera `pagos` como array.
+        # En el flujo PRO, cada Ingreso (RC) es un "pago".
+        ingreso_ids = list(
+            PagoAplicacion.objects
+            .filter(cuota_id=cuota.id, ingreso__estado='ACTIVO')  # ✅ SOLO activos
+            .values_list('ingreso_id', flat=True)
+            .distinct()
         )
 
         pagos = []
-        for p in pagos_qs:
-            medio = (p.get('medio_pago__nombre') or '')
-            medio = 'Banco' if medio == 'Transferencia' else medio
-            pagos.append({
-                'id': p['id'],
-                'fecha_pago': p['fecha_pago'].strftime('%Y-%m-%d'),
-                'valor_pagado': str(p['valor_pagado']),
-                'medio_pago': medio,
-                'numero_factura': p['numero_factura'] or '',
-                'referencia': p['referencia'] or '',
-                'observacion': p['observacion'] or '',
-            })
+        rcs = []  # detalle extendido (opcional) para futuras vistas
+        if ingreso_ids:
+            ingresos = (
+                Ingreso.objects
+                .filter(id__in=ingreso_ids)
+                .select_related('medio_pago')
+                .order_by('-fecha_pago', '-id')
+            )
+
+            # Todas las aplicaciones de esos RC (para mostrar la cascada por cuotas)
+            apps_all = (
+                PagoAplicacion.objects
+                .filter(ingreso_id__in=ingreso_ids, ingreso__estado='ACTIVO')  # ✅ SOLO activos
+                .select_related('cuota')
+                .order_by('ingreso_id', 'cuota__numero')
+                .values('ingreso_id', 'cuota_id', 'cuota__numero', 'valor_aplicado')
+            )
+
+            apps_por_ingreso = {}
+            for row in apps_all:
+                apps_por_ingreso.setdefault(row['ingreso_id'], []).append({
+                    'cuota_id': row['cuota_id'],
+                    'cuota_numero': row['cuota__numero'],
+                    'valor_aplicado': str(row['valor_aplicado']),
+                })
+
+            for ing in ingresos:
+                # ✅ RC se envía en su propio campo (no mezclar con observación)
+                rc_txt = (ing.numero_comprobante or '').strip()
+                obs_txt = (ing.observacion or '').strip()
+
+                # ✅ Formato que espera el JS actual:
+                pagos.append({
+                    'id': ing.id,  # el JS lo usa para eliminar (pago_id)
+                    'fecha_pago': ing.fecha_pago.strftime('%Y-%m-%d') if ing.fecha_pago else '',
+                    'valor_pagado': str(ing.valor_pagado),
+                    'medio_pago': (getattr(ing.medio_pago, 'nombre', None) or '').strip(),
+                    'numero_factura': ing.numero_factura or '',
+                    'referencia': ing.referencia or '',
+                    'observacion': obs_txt or '',
+                    'numero_comprobante': rc_txt,
+                })
+
+                # Detalle extendido (no requerido por el JS, pero útil para auditoría)
+                rcs.append({
+                    'ingreso_id': ing.id,
+                    'numero_comprobante': ing.numero_comprobante or '',
+                    'fecha_pago': ing.fecha_pago.strftime('%Y-%m-%d') if ing.fecha_pago else '',
+                    'valor_rc': str(ing.valor_pagado),
+                    'estado': getattr(ing, 'estado', 'ACTIVO'),
+                    'medio_pago': (getattr(ing.medio_pago, 'nombre', None) or '').strip(),
+                    'numero_factura': ing.numero_factura or '',
+                    'referencia': ing.referencia or '',
+                    'observacion': (ing.observacion or '').strip(),
+                    'aplicaciones': apps_por_ingreso.get(ing.id, []),
+                })
 
         previas_qs = previas_pendientes_for_get(cuota)
+        previas = serializar_previas(previas_qs)
+
+        # Totales para el modal (para mostrar aviso + sumatoria y habilitar botón "Distribuir")
+        total_previas = (
+            previas_qs.aggregate(total=Coalesce(Sum('saldo'), Value(Decimal('0.00'))))
+        )['total'] or Decimal('0.00')
+
+        saldo_actual = saldo_real_fuera_atomic(cuota)
+        capacidad_total = total_previas + saldo_actual
+
+        # Flags/aliases para compatibilidad con el JS anterior del modal
+        tiene_previas = len(previas) > 0
+        saldo_maximo = capacidad_total  # si hay previas, el máximo incluye previas + actual
 
         return JsonResponse({
             'ok': True,
+
+            # NUEVO (estructura actual)
+            'previas': previas,
+            'previas_count': len(previas),
+            'total_previas': str(total_previas),
+            'saldo_actual': str(saldo_actual),
+            'capacidad_total': str(capacidad_total),
             'pagos': pagos,
-            'previas_pendientes': serializar_previas(previas_qs)
+            'rcs': rcs,
+
+            # ALIASES (compatibilidad)
+            # - Algunos JS antiguos esperan estos nombres para pintar el listado y el saldo máximo.
+            'previas_pendientes': previas,
+            'total_previas_pendientes': str(total_previas),
+            'saldo_maximo': str(saldo_maximo),
+            'tiene_previas_pendientes': tiene_previas,
+            'mensaje_previas_pendientes': (
+                'Existen cuotas anteriores con saldo pendiente.' if tiene_previas else ''
+            ),
         })
 
     # =====================================================
@@ -609,7 +842,8 @@ def aplicar_pago(request):
     if resp_error:
         return resp_error
 
-    saldo_actual_previo = (cuota.valor or Decimal('0.00')) - (cuota.valor_pagado or Decimal('0.00'))
+    # Saldo REAL para la cuota (NO usar cache legacy `valor_pagado` para reglas de negocio)
+    saldo_actual_previo = saldo_real_fuera_atomic(cuota)
 
     if not valor_str:
         if saldo_actual_previo <= 0:
@@ -631,10 +865,21 @@ def aplicar_pago(request):
     # Validación previa (FUERA del atomic) para evitar returns dentro de la transacción
     # =====================================================
     if modo != 'auto':
+        # Validación REAL (vía PagoAplicacion), no por cache legacy
         previas_exist = (
             Cuota.objects
             .filter(contrato_id=cuota.contrato_id, numero__lt=cuota.numero)
-            .annotate(saldo=F('valor') - F('valor_pagado'))
+            .annotate(
+                pagado=Coalesce(
+                    Sum(
+                        'aplicaciones__valor_aplicado',
+                        filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                    ),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                ),
+                saldo=F('valor') - F('pagado')
+            )
             .filter(saldo__gt=0)
             .exists()
         )
@@ -673,8 +918,23 @@ def aplicar_pago(request):
             cuota = next(c for c in cuotas_locked if c.id == cuota.id)
             previas_locked = [c for c in cuotas_locked if c.id != cuota.id]
 
+            # Pre-cargar lo ya aplicado por cuota (fuente de verdad)
+            cuota_ids_locked = [c.id for c in cuotas_locked]
+            pagado_map = {
+                row['cuota_id']: (row['total'] or Decimal('0.00'))
+                for row in (
+                    PagoAplicacion.objects
+                    .filter(cuota_id__in=cuota_ids_locked, ingreso__estado='ACTIVO')
+                    .values('cuota_id')
+                    .annotate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
+                )
+            }
+
+            def pagado_de(c):
+                return pagado_map.get(c.id, Decimal('0.00'))
+
             def saldo_de(c):
-                return (c.valor or Decimal('0.00')) - (c.valor_pagado or Decimal('0.00'))
+                return (c.valor or Decimal('0.00')) - pagado_de(c)
 
             previas_con_saldo = [c for c in previas_locked if saldo_de(c) > 0]
             saldo_actual = saldo_de(cuota)
@@ -696,48 +956,61 @@ def aplicar_pago(request):
                     }, status=400)
 
             # =====================================================
-            # Registrar ingreso (tu modelo actual SOLO usa forma_pago texto)
+            # PRO: Ingreso (cabecera RC) + PagoAplicacion (detalle)
+            # - No usamos la tabla legacy `gestion_clientes_pago`.
+            # - Un solo Ingreso por transacción (comprobante RC).
+            # - PagoAplicacion distribuye el monto sobre una o varias cuotas.
             # =====================================================
-            def registrar_ingreso(cuota_obj, aplicar_monto, pago_obj, fecha_pago, usuario, numero_factura):
-                Ingreso.objects.create(
-                    sede=cuota_obj.contrato.estudiante.sede,
-                    concepto_ingreso=ConceptoIngreso.objects.get(pk=1),
-                    valor_pagado=aplicar_monto,
-                    fecha_pago=fecha_pago,
-                    referencia=referencia or None,
-                    observacion=observacion or None,
-                    tipo_registro='pago_cuota',
-                    usuario_registro=usuario,
-                    pago=pago_obj,
-                    contrato=cuota_obj.contrato,
-                    cuota=cuota_obj,
-                    numero_factura=numero_factura
-                )
+
+
+            # Observación: solo lo que el usuario escribió (NO mezclar medio de pago aquí)
+            obs_full = (observacion or '').strip() or None
+
+            ingreso_obj = Ingreso.objects.create(
+                sede=cuota.contrato.estudiante.sede,
+                concepto_ingreso=ConceptoIngreso.objects.get(pk=1),
+                valor_pagado=valor,
+                fecha_pago=fecha_pago,
+                referencia=referencia or None,
+                observacion=obs_full,
+                tipo_registro='pago_cuota',
+                usuario_registro=request.user,
+                contrato=cuota.contrato,
+                cuota=cuota,  # ✅ cuota “principal” (la del modal)
+                numero_factura=numero_factura,
+                numero_comprobante=generar_rc(request, cuota.contrato.estudiante.sede),
+                medio_pago=medio_pago,
+                estado='ACTIVO'
+            )
 
             # =====================================================
-            # Aplicación de pago (crea Pago + Ingreso + actualiza Cuota)
+            # Aplicación de pago (crea PagoAplicacion + actualiza cache en Cuota)
             # =====================================================
             def aplicar_a_cuota(c, monto):
                 aplicar = min(monto, saldo_de(c))
                 if aplicar <= 0:
                     return Decimal('0.00')
 
-                pago_obj = Pago.objects.create(
-                    contrato=c.contrato,
+                PagoAplicacion.objects.create(
+                    ingreso=ingreso_obj,
                     cuota=c,
-                    fecha_pago=fecha_pago,
-                    valor_pagado=aplicar,
-                    medio_pago=medio_pago,
+                    usuario_id=request.user.id,
+                    fecha_aplicacion=now(),  # datetime
+                    valor_aplicado=aplicar,
+                    forma_pago=medio_pago.nombre,
                     numero_factura=numero_factura,
-                    referencia=referencia,
-                    observacion=observacion,
+                    referencia=referencia or None,
+                    observacion=observacion or None
                 )
 
-                registrar_ingreso(c, aplicar, pago_obj, fecha_pago, request.user, numero_factura)
+                # Actualizamos cache legacy para compatibilidad visual (no es fuente de verdad)
+                nuevo_pagado = pagado_de(c) + aplicar
+                pagado_map[c.id] = nuevo_pagado
 
                 c.valor_pagado = (c.valor_pagado or Decimal('0.00')) + aplicar
                 c.estado = 'Pagada' if c.valor_pagado >= c.valor else 'Parcial'
                 c.save(update_fields=['valor_pagado', 'estado'])
+
                 return aplicar
 
             distribucion = []
@@ -757,7 +1030,7 @@ def aplicar_pago(request):
                 if aplicado > 0:
                     distribucion.append({'cuota_id': cuota.id, 'aplicado': str(aplicado)})
 
-            return JsonResponse({'ok': True, 'distribucion': distribucion})
+            return JsonResponse({'ok': True, 'ingreso_id': ingreso_obj.id, 'distribucion': distribucion})
 
     except _AbortarPago as ex:
         return JsonResponse(ex.payload, status=ex.status)
@@ -772,55 +1045,82 @@ def aplicar_pago(request):
 @require_POST
 def eliminar_pago(request):
     """
-    Elimina un pago por su ID y actualiza la cuota (valor_pagado y estado).
-    POST: pago_id
+    PRO: Elimina un comprobante RC (Ingreso) por su ID y revierte sus aplicaciones.
+
+    Compatibilidad:
+    - El frontend puede seguir enviando `pago_id`, pero aquí se interpreta como `ingreso_id`.
+
+    POST: pago_id (ingreso_id)
     """
-    pago_id = (request.POST.get('pago_id') or '').strip()
-    if not pago_id:
+    ingreso_id = (request.POST.get('pago_id') or '').strip()
+    motivo = (request.POST.get('motivo') or '').strip() or None
+
+    if not ingreso_id:
         return JsonResponse({'ok': False, 'error': 'Falta pago_id.'}, status=400)
 
-    # Cargar pago con control por sede
-    pago = get_object_or_404(
-        Pago.objects.select_related('cuota__contrato__estudiante__sede', 'cuota'),
-        pk=pago_id
+    ingreso = get_object_or_404(
+        Ingreso.objects.select_related('contrato__estudiante__sede', 'contrato'),
+        pk=ingreso_id
     )
 
-    # Si el pago no está asociado a cuota
-    if pago.cuota_id is None:
-        pago.delete()
-        return JsonResponse({'ok': True})
-
     sede_ids = user_sede_ids(request.user)
-    if sede_ids and pago.cuota.contrato.estudiante.sede_id not in sede_ids:
+
+    if ingreso.contrato_id is None:
+        return JsonResponse({'ok': False, 'error': 'Este ingreso no está asociado a un contrato.'}, status=400)
+
+    sede_ingreso_id = getattr(ingreso.contrato.estudiante, 'sede_id', None)
+    if sede_ids and sede_ingreso_id not in sede_ids:
         return JsonResponse({'ok': False, 'error': 'No tiene permisos sobre esta sede.'}, status=403)
 
+    # Si ya está anulado, no repetir la operación
+    if getattr(ingreso, 'estado', 'ACTIVO') == 'ANULADO':
+        return JsonResponse({'ok': True, 'ya_estaba_anulado': True})
+
     with transaction.atomic():
-        # Bloquear la cuota y eliminar el pago
-        cuota = Cuota.objects.select_for_update().get(pk=pago.cuota_id)
-        pago.delete()
+        # Cuotas afectadas por este RC
+        cuota_ids = list(
+            PagoAplicacion.objects
+            .filter(ingreso_id=ingreso.id)
+            .values_list('cuota_id', flat=True)
+            .distinct()
+        )
 
-        # Recalcular total pagado y estado
-        nuevo_pagado = cuota.pagos.aggregate(
-            total=Coalesce(
-                Sum('valor_pagado'),
-                Value(Decimal('0.00')),
-                output_field=DecimalField(max_digits=12, decimal_places=2)
-            )
-        )['total'] or Decimal('0.00')
+        cuotas = []
+        if cuota_ids:
+            cuotas = list(Cuota.objects.select_for_update().filter(id__in=cuota_ids))
 
+        # 1) Anular cabecera RC (mantener trazabilidad)
+        ingreso.estado = 'ANULADO'
+        ingreso.fecha_anulacion = now()
+        ingreso.motivo_anulacion = motivo
+        ingreso.usuario_anulacion_id = request.user.id
+        ingreso.save(update_fields=['estado', 'fecha_anulacion', 'motivo_anulacion', 'usuario_anulacion_id'])
+
+        # 2) Recalcular cache por cuota EXCLUYENDO ingresos anulados
         hoy = now().date()
+        for c in cuotas:
+            nuevo_pagado = (
+                PagoAplicacion.objects
+                .filter(cuota_id=c.id, ingreso__estado='ACTIVO')
+                .aggregate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
+            )['total'] or Decimal('0.00')
 
-        if nuevo_pagado >= cuota.valor:
-            cuota.estado = 'Pagada'
-        elif cuota.fecha_vencimiento < hoy and nuevo_pagado < cuota.valor:
-            cuota.estado = 'Vencida'
-        elif nuevo_pagado > 0 and nuevo_pagado < cuota.valor:
-            cuota.estado = 'Parcial'
-        else:
-            cuota.estado = 'Pendiente'
+            c.valor_pagado = nuevo_pagado
 
-        cuota.valor_pagado = nuevo_pagado
-        cuota.save(update_fields=['valor_pagado', 'estado'])
+            if nuevo_pagado >= (c.valor or Decimal('0.00')):
+                c.estado = 'Pagada'
+            else:
+                saldo = (c.valor or Decimal('0.00')) - nuevo_pagado
+                if saldo <= 0:
+                    c.estado = 'Pagada'
+                elif c.fecha_vencimiento and c.fecha_vencimiento < hoy:
+                    c.estado = 'Vencida'
+                elif nuevo_pagado > 0:
+                    c.estado = 'Parcial'
+                else:
+                    c.estado = 'Pendiente'
+
+            c.save(update_fields=['valor_pagado', 'estado'])
 
     return JsonResponse({'ok': True})
 
@@ -1033,10 +1333,8 @@ def nuevo_contrato(request):
     })
     
 @require_GET
+@login_required
 def buscar_acudiente_por_documento(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({'error': 'Unauthorized'}, status=401)
-
     documento_raw = request.GET.get("documento")
     if not documento_raw or not documento_raw.strip():
         return JsonResponse({"existe": False, "error": "Documento inválido"}, status=400)
@@ -1083,6 +1381,8 @@ def nuevo_ingreso(request):
 
             # 🔹 Forzar tipo_registro a 'otro_ingreso' cuando viene del formulario
             ingreso.tipo_registro = 'otro_ingreso'
+            ingreso.numero_comprobante = generar_rc(request, ingreso.sede)
+            ingreso.estado = 'ACTIVO'
             ingreso.save()
             messages.success(request, 'Ingreso registrado correctamente.')
             return redirect('nuevo_ingreso')
@@ -1095,14 +1395,14 @@ def nuevo_ingreso(request):
     if ES_CLEVEL:
         ingresos = (
             Ingreso.objects
-            .filter(tipo_registro='otro_ingreso')
+            .filter(tipo_registro='otro_ingreso', estado='ACTIVO')
             .select_related('sede', 'usuario_registro')
             .order_by('-id')
         )
     else:
         ingresos = (
             Ingreso.objects
-            .filter(usuario_registro=request.user, tipo_registro='otro_ingreso')
+            .filter(usuario_registro=request.user, tipo_registro='otro_ingreso', estado='ACTIVO')
             .select_related('sede', 'usuario_registro')
             .order_by('-id')
         )

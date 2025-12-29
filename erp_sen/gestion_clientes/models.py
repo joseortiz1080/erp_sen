@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 from django.db import models
 from decimal import Decimal
 from django.contrib.auth.models import User
@@ -173,7 +172,8 @@ class Cuota(models.Model):
     # === Nuevos métodos recomendados (vía aplicaciones) ===
     def pagado_via_aplicaciones(self):
         from django.db import models as dj_models
-        return (self.aplicaciones.aggregate(total=dj_models.Sum('monto'))['total']) or Decimal('0')
+        # Suma de montos aplicados (tabla gestion_clientes_pagoaplicacion)
+        return (self.aplicaciones.aggregate(total=dj_models.Sum('valor_aplicado'))['total']) or Decimal('0')
 
     def saldo_via_aplicaciones(self):
         return (self.valor or Decimal('0')) - self.pagado_via_aplicaciones()
@@ -191,6 +191,24 @@ class MedioPago(models.Model):
 
     def __str__(self):
         return self.nombre
+
+class ConsecutivoComprobante(models.Model):
+    sede = models.ForeignKey(
+        'gestion_clientes.Sede',
+        on_delete=models.PROTECT,
+        db_column='sede_id'
+    )
+    prefijo = models.CharField(max_length=10, default='RC')
+    year = models.IntegerField()
+    consecutivo = models.BigIntegerField(default=0)
+
+    class Meta:
+        db_table = 'gestion_finanzas_consecutivo_comprobante'
+        managed = False
+        unique_together = (('sede', 'prefijo', 'year'),)
+
+    def __str__(self):
+        return f"{self.prefijo} | sede={self.sede_id} | {self.year} | {self.consecutivo}"
 
 class Pago(models.Model):
     contrato = models.ForeignKey(
@@ -262,36 +280,41 @@ class Pago(models.Model):
 
 class PagoAplicacion(models.Model):
     """
-    Detalle de distribución del Pago (cabecera) sobre una o varias cuotas.
-    Fuente de verdad para 'pagado' y 'saldo' de cada cuota.
+    Detalle real de aplicación del ingreso (RC) a una cuota.
+    Fuente de verdad para pagado/saldo por cuota.
     """
-    pago = models.ForeignKey(Pago, on_delete=models.CASCADE)
-    cuota = models.ForeignKey(Cuota, on_delete=models.CASCADE, related_name='aplicaciones')
-    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    ingreso = models.ForeignKey(
+        'gestion_clientes.Ingreso',
+        on_delete=models.CASCADE,
+        db_column='ingreso_id',
+        related_name='aplicaciones'
+    )
+    cuota = models.ForeignKey(
+        'gestion_clientes.Cuota',
+        on_delete=models.CASCADE,
+        db_column='cuota_id',
+        related_name='aplicaciones'
+    )
+
+    usuario_id = models.IntegerField(db_column='usuario_id')
+    fecha_aplicacion = models.DateTimeField(db_column='fecha_aplicacion')
+    valor_aplicado = models.DecimalField(max_digits=12, decimal_places=2, db_column='valor_aplicado')
+
+    forma_pago = models.CharField(max_length=30, db_column='forma_pago')
+    numero_factura = models.CharField(max_length=50, null=True, blank=True, db_column='numero_factura')
+    referencia = models.CharField(max_length=100, null=True, blank=True, db_column='referencia')
+    observacion = models.TextField(null=True, blank=True, db_column='observacion')
 
     class Meta:
         db_table = 'gestion_clientes_pagoaplicacion'
         managed = False
-        # Un mismo pago no debe tener más de una fila aplicando a la MISMA cuota.
-        unique_together = (('pago', 'cuota'),)
         indexes = [
-            models.Index(fields=['pago']),
+            models.Index(fields=['ingreso']),
             models.Index(fields=['cuota']),
         ]
-        constraints = [
-            models.CheckConstraint(check=models.Q(monto__gt=0), name='pagoap_monto_gt_0'),
-        ]
-
-    def clean(self):
-        from django.core.exceptions import ValidationError
-        if self.monto is None or self.monto <= Decimal('0'):
-            raise ValidationError("El monto aplicado debe ser mayor a cero.")
-        # Coherencia de contrato entre pago y cuota
-        if self.pago and self.cuota and self.pago.contrato_id != self.cuota.contrato_id:
-            raise ValidationError("El pago y la cuota pertenecen a contratos diferentes.")
 
     def __str__(self):
-        return f"Pago #{self.pago_id} → Cuota #{self.cuota_id}: ${self.monto}"
+        return f"Ingreso #{self.ingreso_id} → Cuota #{self.cuota_id}: ${self.valor_aplicado}"
 
 class ConceptoIngreso(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -337,7 +360,21 @@ class Ingreso(models.Model):
 
     valor_pagado = models.DecimalField(max_digits=10, decimal_places=2)
     fecha_pago = models.DateField()
-    #forma_pago = models.CharField(max_length=50)
+    numero_comprobante = models.CharField(
+        max_length=30,
+        null=True,
+        blank=True,
+        db_column='numero_comprobante'
+    )
+
+    medio_pago = models.ForeignKey(
+        'gestion_clientes.MedioPago',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column='medio_pago_id',
+        related_name='ingresos'
+    )
 
     referencia = models.CharField(max_length=100, null=True, blank=True)
     observacion = models.TextField(null=True, blank=True)
@@ -349,18 +386,37 @@ class Ingreso(models.Model):
         db_column='tipo_registro'
     )
 
+    estado = models.CharField(
+        max_length=20,
+        default='ACTIVO',
+        db_column='estado'
+    )
+
+    fecha_anulacion = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_column='fecha_anulacion'
+    )
+
+    motivo_anulacion = models.TextField(
+        null=True,
+        blank=True,
+        db_column='motivo_anulacion'
+    )
+
+    usuario_anulacion = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column='usuario_anulacion_id',
+        related_name='ingresos_anulados'
+    )
+
     usuario_registro = models.ForeignKey(
         User,
         on_delete=models.PROTECT,
         db_column='usuario_registro_id'
-    )
-
-    pago = models.ForeignKey(
-        'gestion_clientes.Pago',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        db_column='pago_id'
     )
 
     contrato = models.ForeignKey(
@@ -396,7 +452,7 @@ class Ingreso(models.Model):
         verbose_name_plural = 'Ingresos'
 
     def __str__(self):
-        return f"Ingreso #{self.id} - {self.valor_pagado} ({self.fecha_pago})"
+        return f"Ingreso #{self.id} - {self.valor_pagado} ({self.fecha_pago}) [{self.estado}]"
 class Perfil(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
 
