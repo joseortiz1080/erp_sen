@@ -8,88 +8,83 @@
 <h2 class="mb-3">Cuentas por Cobrar — Estudiantes</h2>
 
 <!-- =========================
-     Barra de filtros mínima
+     Filtros (mismo estándar de /cxc/)
      ========================= -->
-<form method="get" class="row g-3 align-items-end mb-4">
+<form method="get" class="card card-body mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-12 col-lg-4">
+      <label class="form-label mb-1">Buscar</label>
+      <input
+        type="text"
+        name="q"
+        class="form-control"
+        placeholder="Estudiante, acudiente, documento"
+        value="{{ q|default:'' }}"
+      />
+      <div class="form-text">
+        Ejemplos: 1023 (ID estudiante), 4788423 (doc.), Pérez (apellido)
+      </div>
+    </div>
 
-  <!-- Buscar -->
-  <div class="col-12 col-md-6 col-lg-4">
-    <label class="form-label">Buscar</label>
-    <input
-      type="text"
-      name="q"
-      value="{{ q }}"
-      class="form-control"
-      placeholder="Estudiante, acudiente o # contrato"
-    >
+    <div class="col-12 col-md-6 col-lg-2">
+      <label class="form-label mb-1">Nivel</label>
+      <select name="nivel" class="form-select">
+        <option value="">(Todos)</option>
+        {% for n in niveles %}
+          <option value="{{ n.id }}" {% if nivel_id|stringformat:'s' == n.id|stringformat:'s' %}selected{% endif %}>{{ n.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-2">
+      <label class="form-label mb-1">Horario</label>
+      <select name="horario" class="form-select">
+        <option value="">(Todos)</option>
+        {% for h in horarios %}
+          <option value="{{ h.id }}" {% if horario_id|stringformat:'s' == h.id|stringformat:'s' %}selected{% endif %}>{{ h.descripcion }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12 col-md-6 col-lg-2">
+      <label class="form-label mb-1">Mora</label>
+      <select name="mora" class="form-select">
+        <option value="">(Todos)</option>
+        <option value="si" {% if mora == 'si' %}selected{% endif %}>En mora</option>
+        <option value="no" {% if mora == 'no' %}selected{% endif %}>Al día</option>
+      </select>
+    </div>
+
+    {% if sedes and sedes|length > 0 %}
+    <div class="col-12 col-md-6 col-lg-2">
+      <label class="form-label mb-1">Sede</label>
+      <select name="sede" class="form-select">
+        <option value="">(Todas)</option>
+        {% for s in sedes %}
+          <option value="{{ s.id }}" {% if sede_id|stringformat:'s' == s.id|stringformat:'s' %}selected{% endif %}>{{ s.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="col-12 col-md-6 col-lg-1">
+      <label class="form-label mb-1">Por página</label>
+      <select name="per_page" class="form-select">
+        <option value="25"  {% if per_page|stringformat:'s' == '25' %}selected{% endif %}>25</option>
+        <option value="50"  {% if per_page|stringformat:'s' == '50' %}selected{% endif %}>50</option>
+        <option value="100" {% if per_page|stringformat:'s' == '100' %}selected{% endif %}>100</option>
+        <option value="200" {% if per_page|stringformat:'s' == '200' %}selected{% endif %}>200</option>
+      </select>
+    </div>
+
+    <div class="col-12 col-lg-1 d-grid">
+      <button type="submit" class="btn btn-primary">Filtrar</button>
+    </div>
+
+    <div class="col-12 col-lg-1 d-grid">
+      <a class="btn btn-outline-secondary" href="{% url 'listar_estudiantes' %}">Limpiar</a>
+    </div>
   </div>
-
-  <!-- Nivel -->
-  <div class="col-6 col-md-3 col-lg-2">
-    <label class="form-label">Nivel</label>
-    <select name="nivel" class="form-select">
-      <option value="">(Todos)</option>
-      {% for n in niveles %}
-        <option value="{{ n.id }}"
-          {% if nivel_id|default:'' == n.id|stringformat:'s' %}selected{% endif %}>
-          {{ n.nombre }}
-        </option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <!-- Horario -->
-  <div class="col-6 col-md-3 col-lg-2">
-    <label class="form-label">Horario</label>
-    <select name="horario" class="form-select">
-      <option value="">(Todos)</option>
-      {% for h in horarios %}
-        <option value="{{ h.id }}"
-          {% if horario_id|default:'' == h.id|stringformat:'s' %}selected{% endif %}>
-          {{ h.descripcion }}
-        </option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <!-- Sede (solo si el usuario no está restringido) -->
-  {% if sedes %}
-  <div class="col-6 col-md-3 col-lg-2">
-    <label class="form-label">Sede</label>
-    <select name="sede" class="form-select">
-      <option value="">(Todas)</option>
-      {% for s in sedes %}
-        <option value="{{ s.id }}"
-          {% if sede_id|default:'' == s.id|stringformat:'s' %}selected{% endif %}>
-          {{ s.nombre }}
-        </option>
-      {% endfor %}
-    </select>
-  </div>
-  {% endif %}
-
-  <!-- Por página -->
-  <div class="col-6 col-md-3 col-lg-2">
-    <label class="form-label">Por página</label>
-    <select name="per_page" class="form-select">
-      {% for n in per_page_options %}
-        <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>
-          {{ n }}
-        </option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <!-- Acciones filtros -->
-  <div class="col-12 col-md-3 col-lg-2 d-flex gap-2">
-    <button type="submit" class="btn btn-primary flex-fill">
-      Filtrar
-    </button>
-    <a href="{% url 'listar_estudiantes' %}" class="btn btn-light flex-fill">
-      Limpiar
-    </a>
-  </div>
-
 </form>
 
 <!-- =========================
@@ -114,7 +109,6 @@
       <th class="text-center">Próximo vencimiento</th>
       <th class="text-center">Estado cartera</th>
       <th class="text-center">Acciones</th>
-      
     </tr>
   </thead>
 
@@ -128,33 +122,13 @@
       <td>{{ estudiante.horario|default:"—" }}</td>
       <td>{{ estudiante.sede }}</td>
 
-      <td class="text-end">
-        {{ estudiante.contrato_valor|default:0|moneda_puntos }}
-      </td>
-
-      <td class="text-center">
-        {{ estudiante.numero_cuotas|default:0 }}
-      </td>
-
-      <td class="text-center">
-        {{ estudiante.cuotas_parciales|default:0 }}
-      </td>
-
-      <td class="text-center">
-        {{ estudiante.cuotas_pagadas|default:0 }}
-      </td>
-
-      <td class="text-center">
-        {{ estudiante.cuotas_vencidas|default:0 }}
-      </td>
-
-      <td class="text-end">
-        {{ estudiante.total_pagado|default:0|moneda_puntos }}
-      </td>
-
-      <td class="text-end">
-        {{ estudiante.saldo_total|default:0|moneda_puntos }}
-      </td>
+      <td class="text-end">{{ estudiante.contrato_valor|default:0|moneda_puntos }}</td>
+      <td class="text-center">{{ estudiante.numero_cuotas|default:0 }}</td>
+      <td class="text-center">{{ estudiante.cuotas_parciales|default:0 }}</td>
+      <td class="text-center">{{ estudiante.cuotas_pagadas|default:0 }}</td>
+      <td class="text-center">{{ estudiante.cuotas_vencidas|default:0 }}</td>
+      <td class="text-end">{{ estudiante.total_pagado|default:0|moneda_puntos }}</td>
+      <td class="text-end">{{ estudiante.saldo_total|default:0|moneda_puntos }}</td>
 
       <td>
         {% if estudiante.proximo_vto %}
@@ -163,79 +137,50 @@
           —
         {% endif %}
       </td>
-      
+
       <td class="text-center">
-      {% if estudiante.estado_cartera == 'En mora' %}
-        <span class="badge bg-danger">En mora</span>
-      {% else %}
-        <span class="badge bg-success">Al día</span>
-      {% endif %}
+        {% if estudiante.estado_cartera == 'En mora' %}
+          <span class="badge bg-danger">En mora</span>
+        {% else %}
+          <span class="badge bg-success">Al día</span>
+        {% endif %}
       </td>
-      
+
       <td class="text-center">
-        <a
-          href="{% url 'detalle_estudiante' estudiante.id %}"
-          class="btn btn-sm btn-outline-primary"
-          title="Ver detalle"
-        >
+        <a href="{% url 'detalle_estudiante' estudiante.id %}" class="btn btn-sm btn-outline-primary" title="Ver detalle">
           <i class="bi bi-search"></i>
         </a>
       </td>
     </tr>
     {% empty %}
     <tr>
-      <td colspan="15" class="text-center">
-        No hay estudiantes registrados.
-      </td>
+      <td colspan="16" class="text-center">No hay estudiantes registrados.</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 
-<!-- =========================
-     Paginación
-     ========================= -->
 {% if page_obj and paginator %}
-<nav aria-label="Paginación">
-  <ul class="pagination">
+<nav aria-label="Paginación" class="mt-3">
+  <ul class="pagination justify-content-center flex-wrap">
     {% if page_obj.has_previous %}
       <li class="page-item">
-        <a class="page-link"
-           href="?page={{ page_obj.previous_page_number }}&amp;per_page={{ per_page }}
-           {% if q %}&amp;q={{ q }}{% endif %}
-           {% if nivel_id %}&amp;nivel={{ nivel_id }}{% endif %}
-           {% if horario_id %}&amp;horario={{ horario_id }}{% endif %}
-           {% if sede_id %}&amp;sede={{ sede_id }}{% endif %}">
-          Anterior
-        </a>
+        <a class="page-link" href="?{% if q %}q={{ q|urlencode }}&{% endif %}{% if nivel_id %}nivel={{ nivel_id }}&{% endif %}{% if horario_id %}horario={{ horario_id }}&{% endif %}{% if mora %}mora={{ mora }}&{% endif %}{% if sede_id %}sede={{ sede_id }}&{% endif %}per_page={{ per_page }}&page={{ page_obj.previous_page_number }}">Anterior</a>
       </li>
     {% else %}
-      <li class="page-item disabled">
-        <span class="page-link">Anterior</span>
-      </li>
+      <li class="page-item disabled"><span class="page-link">Anterior</span></li>
     {% endif %}
 
     <li class="page-item disabled">
-      <span class="page-link">
-        Página {{ page_obj.number }} de {{ paginator.num_pages }}
-      </span>
+      <span class="page-link">Página {{ page_obj.number }} de {{ paginator.num_pages }}</span>
     </li>
 
     {% if page_obj.has_next %}
       <li class="page-item">
-        <a class="page-link"
-           href="?page={{ page_obj.next_page_number }}&amp;per_page={{ per_page }}
-           {% if q %}&amp;q={{ q }}{% endif %}
-           {% if nivel_id %}&amp;nivel={{ nivel_id }}{% endif %}
-           {% if horario_id %}&amp;horario={{ horario_id }}{% endif %}
-           {% if sede_id %}&amp;sede={{ sede_id }}{% endif %}">
-          Siguiente
-        </a>
+        <a class="page-link" href="?{% if q %}q={{ q|urlencode }}&{% endif %}{% if nivel_id %}nivel={{ nivel_id }}&{% endif %}{% if horario_id %}horario={{ horario_id }}&{% endif %}{% if mora %}mora={{ mora }}&{% endif %}{% if sede_id %}sede={{ sede_id }}&{% endif %}per_page={{ per_page }}&page={{ page_obj.next_page_number }}">Siguiente</a>
       </li>
     {% else %}
-      <li class="page-item disabled">
-        <span class="page-link">Siguiente</span>
-      </li>
+      <li class="page-item disabled"><span class="page-link">Siguiente</span></li>
     {% endif %}
   </ul>
 </nav>

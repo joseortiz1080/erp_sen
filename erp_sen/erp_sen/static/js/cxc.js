@@ -150,16 +150,16 @@ async function cargarMedios() {
         tbodyHist.innerHTML = '<tr><td colspan="8" class="text-muted">Sin pagos.</td></tr>';
       } else {
         tbodyHist.innerHTML = data.pagos.map((p, i) => {
+          const rc    = p.numero_comprobante || '—';
           const valor = formatCOP(p.valor_pagado);
-          const medio = p.medio_pago || '—';
           const fac   = p.numero_factura || '—';
           const ref   = p.referencia || '—';
           const obs   = p.observacion || '';
           return `<tr>
             <td>${i + 1}</td>
             <td>${p.fecha_pago}</td>
+            <td>${rc}</td>
             <td>${valor}</td>
-            <td>${medio}</td>
             <td>${fac}</td>
             <td>${ref}</td>
             <td>${obs}</td>

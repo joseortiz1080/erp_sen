@@ -6,9 +6,6 @@
 
 {% block content %}
 
-  <!-- =========================
-      Archivo cargado 24/12/2025
-       ========================= -->
 
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
@@ -30,8 +27,8 @@
 
 <div class="row g-3">
   <!-- =========================
-       Columna izquierda: Perfil + Resumen
-       ========================= -->
+      Columna izquierda: Perfil + Resumen
+      ========================= -->
   <div class="col-12 col-lg-4">
 
     <!-- Perfil -->
@@ -196,8 +193,8 @@
   </div>
 
   <!-- =========================
-       Columna derecha: Contrato + Cuotas
-       ========================= -->
+      Columna derecha: Contrato + Cuotas
+      ========================= -->
   <div class="col-12 col-lg-8">
 
     {% if contrato %}
@@ -230,9 +227,6 @@
 
           <div class="d-flex align-items-center justify-content-between mb-2">
             <h5 class="mb-0">Estado Detallado Financiamiento del Contrato</h5>
-            <div class="text-muted small">
-              Fecha corte: {% if hoy %}{{ hoy|date:"M d, Y" }}{% else %}—{% endif %}
-            </div>
           </div>
 
           <div class="table-responsive">

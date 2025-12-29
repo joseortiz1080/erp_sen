@@ -10,8 +10,11 @@
 <form method="get" class="row g-2 mb-3">
   <div class="col-md-3">
     <label class="form-label">Buscar</label>
-    <input type="text" name="q" value="{{ q }}" class="form-control"
-           placeholder="Estudiante, acudiente, contrato, factura, referencia">
+    <input type="text" name="q" value="{{ q|default:'' }}" class="form-control"
+           placeholder="Nombre/Documento (estudiante o acudiente), contrato (ID), factura, referencia, RC">
+    <div class="form-text">
+      Ejemplos: 1023… (documento), Pérez (apellido), 50 (ID contrato), RC-1-2025-00000012, FAC-001, REF-123.
+    </div>
   </div>
 
   <div class="col-md-2">
@@ -202,7 +205,7 @@
   <ul class="pagination pagination-sm">
     {% if page_obj.has_previous %}
       <li class="page-item">
-        <a class="page-link" href="?page={{ page_obj.previous_page_number }}&per_page={{ per_page }}{% if request.GET %}&{{ request.GET.urlencode|safe|cut:'page='|cut:'per_page=' }}{% endif %}">«</a>
+        <a class="page-link" href="?page={{ page_obj.previous_page_number }}&per_page={{ per_page }}{% for k,v in request.GET.items %}{% if k != 'page' and k != 'per_page' %}&{{ k }}={{ v|urlencode }}{% endif %}{% endfor %}">«</a>
       </li>
     {% else %}
       <li class="page-item disabled"><span class="page-link">«</span></li>
@@ -212,7 +215,7 @@
 
     {% if page_obj.has_next %}
       <li class="page-item">
-        <a class="page-link" href="?page={{ page_obj.next_page_number }}&per_page={{ per_page }}{% if request.GET %}&{{ request.GET.urlencode|safe|cut:'page='|cut:'per_page=' }}{% endif %}">»</a>
+        <a class="page-link" href="?page={{ page_obj.next_page_number }}&per_page={{ per_page }}{% for k,v in request.GET.items %}{% if k != 'page' and k != 'per_page' %}&{{ k }}={{ v|urlencode }}{% endif %}{% endfor %}">»</a>
       </li>
     {% else %}
       <li class="page-item disabled"><span class="page-link">»</span></li>
@@ -221,159 +224,13 @@
 </nav>
 {% endif %}
 
-<!-- ====== MODAL: APLICAR PAGO ====== -->
-<style>
-  #modalPago .modal-body{ max-height: 70vh; overflow-y: auto; }
-  #mp-historial-wrap{
-    height: 28vh; overflow-y: auto; overflow-x: hidden;
-    border: 1px solid #eee; border-radius: .25rem; background: #fff;
-  }
-  #mp-historial-wrap thead th{ position: sticky; top: 0; z-index: 1; background: #f8f9fa; }
-</style>
-
-<div class="modal fade" id="modalPago" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content">
-      <form id="pagoForm">
-        {% csrf_token %}
-        <div class="modal-header">
-          <h5 class="modal-title">Aplicar pago a cuota <span id="mp-cuota-num"></span></h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
-        </div>
-
-        <div class="modal-body">
-          <input type="hidden" name="cuota_id" id="mp-cuota-id">
-          <input type="hidden" name="modo" id="mp-modo" value="">
-
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Estudiante</label>
-              <input class="form-control" id="mp-estudiante" type="text" readonly>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Acudiente</label>
-              <input class="form-control" id="mp-acudiente" type="text" readonly>
-            </div>
-
-            <div class="col-md-4">
-              <label class="form-label">Nivel</label>
-              <input class="form-control" id="mp-nivel" type="text" readonly>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Horario</label>
-              <input class="form-control" id="mp-horario" type="text" readonly>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Vence</label>
-              <input class="form-control" id="mp-vence" type="text" readonly>
-            </div>
-
-            <div class="col-md-4">
-              <label class="form-label">Valor cuota</label>
-              <input class="form-control" id="mp-valor" type="text" readonly>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Pagado</label>
-              <input class="form-control" id="mp-pagado" type="text" readonly>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Saldo por pagar</label>
-              <input class="form-control" id="mp-saldo" type="text" readonly>
-            </div>
-
-            <div class="col-md-3">
-              <label class="form-label">Fecha pago</label>
-              <input class="form-control" name="fecha_pago" id="mp-fecha" type="date" value="{{ hoy|date:'Y-m-d' }}">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Forma de pago</label>
-              <select class="form-select" name="forma_pago" id="mp-forma">
-                <option value="Banco">Banco</option>
-                <option value="Nequi">Nequi</option>
-                <option value="Transferencia">Transferencia</option>
-                <option value="Efectivo">Efectivo</option>
-                <option value="Otro">Otro</option>
-              </select>
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">N° factura (opcional)</label>
-              <input class="form-control" name="numero_factura" id="mp-factura" type="text" maxlength="30">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Referencia <span class="text-danger">*</span></label>
-              <input class="form-control" name="referencia" id="mp-referencia" type="text" maxlength="100" required>
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Valor a pagar</label>
-              <input class="form-control" name="valor_pagado" id="mp-valor-pagar" type="number" step="1" min="1" required>
-              <div class="form-text" id="mp-ayuda"></div>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Observaciones</label>
-              <textarea class="form-control" name="observacion" id="mp-obs" rows="2"></textarea>
-            </div>
-
-            <div class="col-12 d-flex justify-content-end gap-2">
-              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-              <button type="submit" class="btn btn-primary">Aplicar pago</button>
-            </div>
-          </div>
-
-          <div id="mp-previas-wrap" class="d-none mt-3">
-            <div class="alert alert-warning py-2 px-3 small mb-2">
-              Existen <strong>cuotas anteriores con saldo pendiente</strong>. Puedes
-              <em>distribuir automáticamente</em> este pago priorizando las cuotas más antiguas.
-            </div>
-            <table class="table table-sm table-bordered mb-2">
-              <thead class="table-light">
-                <tr>
-                  <th style="width:90px;">Cuota #</th>
-                  <th>Vence</th>
-                  <th>Saldo</th>
-                </tr>
-              </thead>
-              <tbody id="mp-previas-body"></tbody>
-            </table>
-            <div class="d-flex justify-content-end gap-2">
-              <button type="button" id="mp-btn-auto" class="btn btn-outline-primary btn-sm">
-                Aplicar automáticamente (anteriores primero)
-              </button>
-            </div>
-          </div>
-
-          <hr class="my-3">
-          <h6 class="mb-2">Historial de pagos de esta cuota</h6>
-          <div id="mp-historial-wrap">
-            <table class="table table-sm table-bordered mb-0">
-              <thead class="table-light">
-                <tr>
-                  <th style="width: 60px;">N°</th>
-                  <th>Fecha</th>
-                  <th>Valor</th>
-                  <th>Medio</th>
-                  <th>Factura</th>
-                  <th>Referencia</th>
-                  <th>Observación</th>
-                  <th style="width: 120px;">Acciones</th>
-                </tr>
-              </thead>
-              <tbody id="mp-historial-body">
-                <tr><td colspan="8" class="text-muted">Sin pagos.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- sin modal-footer -->
-      </form>
-    </div>
-  </div>
-</div>
+{% include 'modal_aplicar_pago.html' %}
 
 <!-- === Config para el JS externo + import del archivo estático === -->
 <div id="cxc-config"
     data-aplicar-url="{% url 'aplicar_pago' %}"
     data-eliminar-url="{% url 'eliminar_pago' %}"
+    data-medios-url="{% url 'listar_medios_pago' %}"
     data-hoy="{{ hoy|date:'Y-m-d' }}">
 </div>
 <script src="{% static 'js/cxc.js' %}"></script>
