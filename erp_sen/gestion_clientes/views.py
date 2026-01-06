@@ -110,9 +110,147 @@ def generar_rc(request, sede):
         rc = f"{prefijo}-{sede.id}-{year}-{str(consecutivo_obj.consecutivo).zfill(8)}"
         return rc
 
+
 @login_required
 def dashboard_view(request):
-    return render(request, 'dashboard.html')
+    """Dashboard operacional (KPIs + series para gráficas).
+
+    Nota: Se usan imports locales para no tocar el header del archivo y minimizar riesgo en producción.
+    Respeta seguridad por sede vía `user_sede_ids`.
+    """
+    import json
+    from datetime import date
+    from django.db.models import Sum, F, Value, Q, DecimalField
+    from django.db.models.functions import Coalesce, TruncMonth
+
+    hoy = now().date()
+    sede_ids = user_sede_ids(request.user)
+
+    # -----------------------------
+    # Helper nativo: primer día del mes (hoy - n meses)
+    # Evita dependencia de `python-dateutil` (relativedelta)
+    # -----------------------------
+    def _first_day_months_ago(d: date, months_back: int) -> date:
+        y = d.year
+        m = d.month - months_back
+        while m <= 0:
+            m += 12
+            y -= 1
+        return d.replace(year=y, month=m, day=1)
+
+    inicio_mes = hoy.replace(day=1)
+    hace_6_meses = _first_day_months_ago(inicio_mes, 5)
+    hace_12_meses = _first_day_months_ago(inicio_mes, 11)  # mes actual + 5 anteriores
+
+    # -----------------------------
+    # QuerySets base (respetando sede)
+    # -----------------------------
+    estudiantes_qs = Estudiante.objects.all()
+    contratos_qs = Contrato.objects.all()
+    cuotas_qs = Cuota.objects.select_related('contrato__estudiante__sede')
+    ingresos_qs = Ingreso.objects.select_related('sede').filter(estado='ACTIVO')
+
+    if sede_ids:
+        estudiantes_qs = estudiantes_qs.filter(sede_id__in=sede_ids)
+        contratos_qs = contratos_qs.filter(estudiante__sede_id__in=sede_ids)
+        cuotas_qs = cuotas_qs.filter(contrato__estudiante__sede_id__in=sede_ids)
+        ingresos_qs = ingresos_qs.filter(sede_id__in=sede_ids)
+
+    # -----------------------------
+    # KPIs de operación
+    # -----------------------------
+    total_estudiantes = estudiantes_qs.count()
+    estudiantes_activos = estudiantes_qs.filter(estado='Activo').count()
+
+    contratos_activos = contratos_qs.filter(estado='Activo').count()
+
+    # Mora real (vía PagoAplicacion e ingresos ACTIVO)
+    cuotas_con_saldo = (
+        cuotas_qs
+        # Excluir cuota 0 (cuota inicial/administrativa) para cartera/mora
+        .exclude(numero=0)
+        .annotate(
+            pagado=Coalesce(
+                Sum(
+                    'aplicaciones__valor_aplicado',
+                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                ),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            ),
+        )
+        .annotate(saldo=F('valor') - F('pagado'))
+    )
+
+    cuotas_vencidas_qs = cuotas_con_saldo.filter(fecha_vencimiento__lt=hoy, saldo__gt=0)
+    cuotas_vencidas = cuotas_vencidas_qs.count()
+    saldo_vencido = (
+        cuotas_vencidas_qs.aggregate(
+            total=Coalesce(Sum('saldo'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
+        )['total']
+        or Decimal('0.00')
+    )
+
+    # Ingresos del mes (ACTIVO)
+# Ingresos últimos 12 meses (ACTIVO) - SOLO para el KPI del card
+    ingresos_mes = (
+        ingresos_qs
+        .filter(fecha_pago__gte=hace_12_meses, fecha_pago__lte=hoy)
+        .aggregate(
+            total=Coalesce(
+                Sum('valor_pagado'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )['total']
+        or Decimal('0.00')
+    )
+
+    # Ingresos últimos 6 meses (serie)
+    ingresos_6m_rows = (
+        ingresos_qs
+        .filter(fecha_pago__gte=hace_6_meses, fecha_pago__lte=hoy)
+        .annotate(mes=TruncMonth('fecha_pago'))
+        .values('mes')
+        .annotate(total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('mes')
+    )
+
+    labels_6m = []
+    values_6m = []
+    for r in ingresos_6m_rows:
+        mes = r['mes']
+        labels_6m.append(mes.strftime('%Y-%m') if mes else '')
+        values_6m.append(float(r['total'] or 0))
+
+    # Top sedes por ingresos (últimos 30 días)
+    top_sedes_rows = (
+        ingresos_qs
+        .filter(fecha_pago__gte=hoy.replace(day=1), fecha_pago__lte=hoy)
+        .values('sede__nombre')
+        .annotate(total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('-total')[:5]
+    )
+
+    top_sedes_labels = [r['sede__nombre'] or '' for r in top_sedes_rows]
+    top_sedes_values = [float(r['total'] or 0) for r in top_sedes_rows]
+
+    context = {
+        'kpis': {
+            'total_estudiantes': total_estudiantes,
+            'estudiantes_activos': estudiantes_activos,
+            'contratos_activos': contratos_activos,
+            'cuotas_vencidas': cuotas_vencidas,
+            'saldo_vencido': saldo_vencido,
+            'ingresos_mes': ingresos_mes,
+        },
+        # Series listas para Chart.js (o similar)
+        'chart_ingresos_6m': json.dumps({'labels': labels_6m, 'values': values_6m}),
+        'chart_top_sedes': json.dumps({'labels': top_sedes_labels, 'values': top_sedes_values}),
+        'hoy': hoy,
+    }
+
+    return render(request, 'dashboard.html', context)
 
 
 
@@ -134,19 +272,31 @@ def listar_estudiantes(request):
         per_page = 50
     page = request.GET.get('page', 1)
 
-    # --------- Subqueries/KPIs por estudiante ---------
-    contrato_valor_sq = Subquery(
+    # ==========================================================
+    # REGLA DE NEGOCIO (ERP): KPIs SIEMPRE por CONTRATO ACTIVO
+    # - contrato_activo_id = último contrato del estudiante
+    # - Cuota #0 NO entra a cartera/KPIs
+    # ==========================================================
+
+    contrato_activo_id_sq = Subquery(
         Contrato.objects
         .filter(estudiante_id=OuterRef('pk'))
         .order_by('-id')
+        .values('id')[:1]
+    )
+
+    contrato_valor_sq = Subquery(
+        Contrato.objects
+        .filter(id=OuterRef('contrato_activo_id'))
         .values('valor_total')[:1],
         output_field=DecimalField(max_digits=12, decimal_places=2)
     )
 
     numero_cuotas_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'))
-        .values('contrato__estudiante_id')
+        .filter(contrato_id=OuterRef('contrato_activo_id'))
+        .exclude(numero=0)
+        .values('contrato_id')
         .annotate(cnt=Count('id'))
         .values('cnt')[:1],
         output_field=IntegerField()
@@ -154,27 +304,33 @@ def listar_estudiantes(request):
 
     cuotas_pagadas_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Pagada')
-        .values('contrato__estudiante_id')
+        .filter(contrato_id=OuterRef('contrato_activo_id'), estado='Pagada')
+        .exclude(numero=0)
+        .values('contrato_id')
         .annotate(cnt=Count('id'))
         .values('cnt')[:1],
         output_field=IntegerField()
     )
 
+    cuotas_parciales_sq = Subquery(
+        Cuota.objects
+        .filter(contrato_id=OuterRef('contrato_activo_id'), estado='Parcial')
+        .exclude(numero=0)
+        .values('contrato_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField()
+    )
+
+    # Cuotas vencidas = cuotas del contrato activo con saldo > 0 y vencimiento < hoy
     cuotas_vencidas_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'))
-        .annotate(
-            pagado=Coalesce(
-                Sum(
-                    'aplicaciones__valor_aplicado',
-                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
-                ),
-                Value(Decimal('0.00'))
-            )
+        .filter(
+            contrato__estudiante_id=OuterRef('pk'),
+            fecha_vencimiento__lt=hoy,
+            estado__in=['Parcial', 'Vencida'],
         )
-        .annotate(saldo=F('valor') - F('pagado'))
-        .filter(fecha_vencimiento__lt=hoy, saldo__gt=0)
+        .exclude(numero=0)
         .values('contrato__estudiante_id')
         .annotate(cnt=Count('id'))
         .values('cnt')[:1],
@@ -183,44 +339,56 @@ def listar_estudiantes(request):
 
     total_pagado_sq = Subquery(
         PagoAplicacion.objects
-        .filter(cuota__contrato__estudiante_id=OuterRef('pk'), ingreso__estado='ACTIVO')
-        .values('cuota__contrato__estudiante_id')
+        .filter(cuota__contrato_id=OuterRef('contrato_activo_id'), ingreso__estado='ACTIVO')
+        .values('cuota__contrato_id')
         .annotate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
         .values('total')[:1],
         output_field=DecimalField(max_digits=12, decimal_places=2)
     )
 
+    # Saldo total = SUM(valor) - SUM(aplicado_activo) del contrato activo
     saldo_total_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'))
-        .values('contrato__estudiante_id')
+        .filter(contrato_id=OuterRef('contrato_activo_id'))
+        .exclude(numero=0)
+        .values('contrato_id')
         .annotate(
-            total_valor=Coalesce(Sum('valor'), Value(Decimal('0.00'))),
+            total_valor=Coalesce(
+                Sum('valor'),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            ),
             total_pagado=Coalesce(
                 Sum(
                     'aplicaciones__valor_aplicado',
                     filter=Q(aplicaciones__ingreso__estado='ACTIVO')
                 ),
-                Value(Decimal('0.00'))
+                Value(Decimal('0.00')),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
             ),
         )
-        .annotate(saldo=F('total_valor') - F('total_pagado'))
-        .values('saldo')[:1],
+        .annotate(total=F('total_valor') - F('total_pagado'))
+        .values('total')[:1],
         output_field=DecimalField(max_digits=12, decimal_places=2)
     )
 
-    cuotas_parciales_sq = Subquery(
-        Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'), estado='Parcial')
-        .values('contrato__estudiante_id')
-        .annotate(cnt=Count('id'))
-        .values('cnt')[:1],
-        output_field=IntegerField()
-    )
-
+    # Próximo vencimiento = primera cuota con saldo > 0 (contrato activo)
     proximo_vto_sq = Subquery(
         Cuota.objects
-        .filter(contrato__estudiante_id=OuterRef('pk'), valor__gt=F('valor_pagado'))
+        .filter(contrato_id=OuterRef('contrato_activo_id'))
+        .exclude(numero=0)
+        .annotate(
+            pagado=Coalesce(
+                Sum(
+                    'aplicaciones__valor_aplicado',
+                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                ),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .annotate(saldo=F('valor') - F('pagado'))
+        .filter(saldo__gt=0)
         .order_by('fecha_vencimiento')
         .values('fecha_vencimiento')[:1]
     )
@@ -230,19 +398,33 @@ def listar_estudiantes(request):
         Estudiante.objects
         .select_related('nivel', 'sede', 'acudiente', 'horario')
         .annotate(
+            contrato_activo_id=contrato_activo_id_sq,
+        )
+        .annotate(
             contrato_valor=Coalesce(contrato_valor_sq, Value(Decimal('0.00'))),
             numero_cuotas=Coalesce(numero_cuotas_sq, Value(0)),
             cuotas_pagadas=Coalesce(cuotas_pagadas_sq, Value(0)),
+            cuotas_parciales=Coalesce(cuotas_parciales_sq, Value(0)),
             cuotas_vencidas=Coalesce(cuotas_vencidas_sq, Value(0)),
             total_pagado=Coalesce(total_pagado_sq, Value(Decimal('0.00'))),
             saldo_total=Coalesce(saldo_total_sq, Value(Decimal('0.00'))),
-            cuotas_parciales=Coalesce(cuotas_parciales_sq, Value(0)),
             proximo_vto=proximo_vto_sq,
+        )
+        .annotate(
+            en_mora=Case(
+                When(
+                    Q(contrato_activo_id__isnull=False) & Q(saldo_total__gt=0) & Q(proximo_vto__lt=hoy),
+                    then=Value(True)
+                ),
+                default=Value(False),
+                output_field=BooleanField()
+            )
+        )
+        .annotate(
             estado_cartera=Case(
-                When(cuotas_vencidas__gt=0, then=Value('En mora')),
+                When(en_mora=True, then=Value('En mora')),
                 default=Value('Al día'),
-                output_field=models.CharField(max_length=20)
-            ),
+            )
         )
         .order_by('-id')
     )
@@ -274,9 +456,9 @@ def listar_estudiantes(request):
 
     # --------- Mora (estado cartera) ---------
     if mora == 'si':
-        qs = qs.filter(cuotas_vencidas__gt=0)
+        qs = qs.filter(en_mora=True)
     elif mora == 'no':
-        qs = qs.filter(cuotas_vencidas__lte=0)
+        qs = qs.filter(en_mora=False)
 
     # --------- Sede desde GET (solo si NO hay restricción previa) ---------
     if sede_id:
@@ -329,6 +511,7 @@ def detalle_estudiante(request, id):
     kpis = {
         'saldo_pendiente': Decimal('0.00'),
         'total_pagado': Decimal('0.00'),
+        'cuota_inicial': Decimal('0.00'),
         'vencidas_count': 0,
         'vencidas_valor': Decimal('0.00'),
         'proximo_vencimiento': None,
@@ -351,48 +534,45 @@ def detalle_estudiante(request, id):
                     output_field=DecimalField(max_digits=12, decimal_places=2)
                 ),
             )
-            .annotate(
-                saldo=F('valor') - F('pagado'),
-                es_vencida_roja=Case(
-                    When(Q(fecha_vencimiento__lt=hoy) & Q(valor__gt=F('pagado')), then=Value(True)),
-                    default=Value(False),
-                    output_field=BooleanField()
-                )
-            )
             .order_by('numero')
         )
 
-        resumen = cuotas.aggregate(
-            saldo_pendiente=Coalesce(Sum('saldo'), Value(Decimal('0.00'))),
+        # -----------------------------
+        # KPIs en Python (evita Sum sobre anotaciones con aggregates)
+        # -----------------------------
+        cuotas_list = list(cuotas)
+        saldo_pendiente = Decimal('0.00')
+        vencidas_count = 0
+        vencidas_valor = Decimal('0.00')
 
-            vencidas_count=Coalesce(Sum(
-                Case(
-                    When(es_vencida_roja=True, then=Value(1)),
-                    default=Value(0),
-                    output_field=IntegerField()
-                )
-            ), Value(0)),
+        for c in cuotas_list:
+            pagado_c = getattr(c, 'pagado', Decimal('0.00')) or Decimal('0.00')
+            valor_c = c.valor or Decimal('0.00')
+            saldo_c = valor_c - pagado_c
+            # guardamos saldo/es_vencida_roja para el template
+            c.saldo = saldo_c
+            c.es_vencida_roja = bool(c.fecha_vencimiento and c.fecha_vencimiento < hoy and saldo_c > 0)
 
-            vencidas_valor=Coalesce(Sum(
-                Case(
-                    When(es_vencida_roja=True, then=F('saldo')),
-                    default=Value(Decimal('0.00')),
-                    output_field=DecimalField(max_digits=12, decimal_places=2)
-                )
-            ), Value(Decimal('0.00'))),
-        )
+            saldo_pendiente += saldo_c
+            if c.es_vencida_roja:
+                vencidas_count += 1
+                vencidas_valor += saldo_c
 
-        kpis['saldo_pendiente'] = resumen['saldo_pendiente'] or Decimal('0.00')
-        kpis['vencidas_count'] = int(resumen['vencidas_count'] or 0)
-        kpis['vencidas_valor'] = resumen['vencidas_valor'] or Decimal('0.00')
+        cuotas = cuotas_list
 
-        kpis['proximo_vencimiento'] = (
-            cuotas
-            .filter(saldo__gt=0)
-            .order_by('fecha_vencimiento')
-            .values_list('fecha_vencimiento', flat=True)
-            .first()
-        )
+        kpis['saldo_pendiente'] = saldo_pendiente
+        kpis['vencidas_count'] = int(vencidas_count)
+        kpis['vencidas_valor'] = vencidas_valor
+
+        # Alinear con el template: {{ estudiante.cuotas_vencidas|default:0 }}
+        # (solo contrato activo, según regla de negocio)
+        estudiante.cuotas_vencidas = kpis['vencidas_count']
+
+        kpis['proximo_vencimiento'] = None
+        for c in cuotas:
+            if c.saldo > 0:
+                kpis['proximo_vencimiento'] = c.fecha_vencimiento
+                break
 
         total_pagado = (
             PagoAplicacion.objects
@@ -402,6 +582,14 @@ def detalle_estudiante(request, id):
 
         # ✅ ESTA LÍNEA ES LA QUE TE FALTA
         kpis['total_pagado'] = total_pagado or Decimal('0.00')
+
+        # Cuota inicial (Cuota #0). En el flujo PRO, esta cuota se crea cuando se registra cuota inicial.
+        cuota_inicial_val = (
+            Cuota.objects
+            .filter(contrato=contrato_activo, numero=0)
+            .aggregate(total=Coalesce(Sum('valor'), Value(Decimal('0.00'))))
+        )['total']
+        kpis['cuota_inicial'] = cuota_inicial_val or Decimal('0.00')
 
         ultimo_ap = (
             PagoAplicacion.objects
@@ -1141,6 +1329,40 @@ def nuevo_contrato(request):
     # Helpers
     # =========================
 
+    # =========================
+    # Render helper: preserva estado de UI (switch cuota inicial + campos de pago)
+    # - Evita que el formulario “se reinicie” cuando hay errores backend
+    # =========================
+    def _render_nuevo_contrato_error(acudiente_form, estudiante_form, contrato_form, extra_context=None):
+        """Renderiza el template preservando estado del switch de cuota inicial y valores posteados."""
+        extra_context = extra_context or {}
+
+        registrar_ci_raw = (request.POST.get('registrar_cuota_inicial') or '').strip().lower()
+        registrar_ci_on = registrar_ci_raw in ('1', 'on', 'true', 'yes')
+
+        cuota_inicial_raw = request.POST.get('cuota_inicial')
+        cuota_inicial_val = (str(cuota_inicial_raw).strip() if cuota_inicial_raw is not None else '')
+
+        pago_ci = {
+            'medio_pago_id': (request.POST.get('pago_cuota_inicial_medio_pago_id') or '').strip(),
+            'referencia': (request.POST.get('pago_cuota_inicial_referencia') or '').strip(),
+            'numero_factura': (request.POST.get('pago_cuota_inicial_numero_factura') or '').strip(),
+            'observacion': (request.POST.get('pago_cuota_inicial_observacion') or '').strip(),
+        }
+
+        ctx = {
+            'form_acudiente': acudiente_form,
+            'form_estudiante': estudiante_form,
+            'form_contrato': contrato_form,
+
+            # UI state (no rompe nada aunque el template aún no lo use)
+            'registrar_ci_on': registrar_ci_on,
+            'cuota_inicial_value': cuota_inicial_val,
+            'pago_cuota_inicial': pago_ci,
+        }
+        ctx.update(extra_context)
+        return render(request, 'nuevo_contrato.html', ctx)
+
     def _p(key_pref, key_plain, default=None):
         val = request.POST.get(key_pref)
         if val is None or val == "":
@@ -1196,7 +1418,7 @@ def nuevo_contrato(request):
             acudiente_existente = Acudiente.objects.filter(documento=doc_acu).first()
 
         if acudiente_existente:
-            acudiente_form = AcudienteForm(prefix='acudiente')
+            acudiente_form = AcudienteForm(instance=acudiente_existente, prefix='acudiente')
         else:
             acudiente_form = AcudienteForm(request.POST, prefix='acudiente')
 
@@ -1204,28 +1426,70 @@ def nuevo_contrato(request):
         # VALIDACIONES
         # =========================
         if not acudiente_existente and not acudiente_form.is_valid():
-            messages.error(request, f"Acudiente inválido: {acudiente_form.errors}")
-            return render(request, 'nuevo_contrato.html', {
-                'form_acudiente': acudiente_form,
-                'form_estudiante': estudiante_form,
-                'form_contrato': contrato_form,
-            })
+            messages.error(request, "Revisa los datos del acudiente. Hay campos obligatorios o inválidos.")
+            return _render_nuevo_contrato_error(acudiente_form, estudiante_form, contrato_form)
 
         if not estudiante_form.is_valid():
-            messages.error(request, f"Estudiante inválido: {estudiante_form.errors}")
-            return render(request, 'nuevo_contrato.html', {
-                'form_acudiente': acudiente_form,
-                'form_estudiante': estudiante_form,
-                'form_contrato': contrato_form,
-            })
+            messages.error(request, "Revisa los datos del estudiante. Hay campos obligatorios o inválidos.")
+            return _render_nuevo_contrato_error(acudiente_form, estudiante_form, contrato_form)
 
         if not contrato_form.is_valid():
-            messages.error(request, f"Contrato inválido: {contrato_form.errors}")
-            return render(request, 'nuevo_contrato.html', {
-                'form_acudiente': acudiente_form,
-                'form_estudiante': estudiante_form,
-                'form_contrato': contrato_form,
-            })
+            messages.error(request, "Revisa los datos del contrato. Hay campos obligatorios o inválidos.")
+            return _render_nuevo_contrato_error(acudiente_form, estudiante_form, contrato_form)
+
+        # =========================
+        # VALIDACIONES (BACKEND) CUOTA INICIAL + PAGO CI
+        # - No confiar solo en JS/required
+        # - Si el switch está ON => cuota inicial obligatoria y > 0
+        # - Si cuota inicial > 0 => medio de pago y referencia obligatorios y válidos
+        # =========================
+        registrar_ci_raw = (request.POST.get('registrar_cuota_inicial') or '').strip().lower()
+        registrar_ci_on = registrar_ci_raw in ('1', 'on', 'true', 'yes')
+
+        cuota_inicial_raw = request.POST.get('cuota_inicial')
+        cuota_inicial_raw_str = (str(cuota_inicial_raw).strip() if cuota_inicial_raw is not None else '')
+
+        if registrar_ci_on:
+            # 1) Cuota inicial obligatoria y > 0 (aunque el JS la convierta a "0")
+            ci_val = cop_to_decimal(cuota_inicial_raw_str, default=Decimal('0'))
+            if ci_val <= 0:
+                messages.error(
+                    request,
+                    'No se pudo guardar: la cuota inicial es obligatoria y debe ser mayor a 0 cuando activas “Registrar Cuota inicial”.'
+                )
+                return _render_nuevo_contrato_error(
+                    acudiente_form,
+                    estudiante_form,
+                    contrato_form,
+                    extra_context={
+                        'error_cuota_inicial': 'La cuota inicial es obligatoria y debe ser mayor a 0 cuando activas “Registrar Cuota inicial”.'
+                    }
+                )
+
+            # 2) Si cuota inicial > 0 => medio de pago y referencia obligatorios
+            medio_ci_id = (request.POST.get('pago_cuota_inicial_medio_pago_id') or '').strip()
+            ref_ci = (request.POST.get('pago_cuota_inicial_referencia') or '').strip()
+
+            errores_pago_ci = {}
+
+            if not medio_ci_id:
+                errores_pago_ci['error_pago_cuota_inicial_medio'] = 'Debes seleccionar un medio de pago.'
+            else:
+                # Validar que el medio exista y esté activo
+                if not MedioPago.objects.filter(id=medio_ci_id, activo=True).exists():
+                    errores_pago_ci['error_pago_cuota_inicial_medio'] = 'El medio de pago seleccionado no es válido o está inactivo.'
+
+            if not ref_ci:
+                errores_pago_ci['error_pago_cuota_inicial_referencia'] = 'Debes ingresar una referencia.'
+
+            if errores_pago_ci:
+                messages.error(request, 'No se pudo guardar: completa los datos de pago de la cuota inicial.')
+                return _render_nuevo_contrato_error(
+                    acudiente_form,
+                    estudiante_form,
+                    contrato_form,
+                    extra_context=errores_pago_ci
+                )
 
         # =========================
         # GUARDADO ATÓMICO
@@ -1262,13 +1526,10 @@ def nuevo_contrato(request):
 
                 fecha_inicio = compute_fecha_inicio_from_corte(dia_corte)
 
-                # =========================
-                # CÁLCULO CUOTAS (COP ENTEROS) basado en VALOR A FINANCIAR
-                # =========================
+                # Cálculo cuotas basado en VALOR A FINANCIAR
                 total = Decimal(contrato.valor_total)
                 n = int(contrato.numero_cuotas)
 
-                # cuota_inicial viene del HTML: name="cuota_inicial"
                 cuota_inicial = cop_to_decimal(request.POST.get('cuota_inicial'), default=Decimal('0'))
                 if cuota_inicial < 0:
                     cuota_inicial = Decimal('0')
@@ -1277,27 +1538,68 @@ def nuevo_contrato(request):
                 if financiar < 0:
                     financiar = Decimal('0')
 
-                # ✅ CUOTA BASE ENTERA (sin decimales)
                 valor_base = (financiar / Decimal(n)).to_integral_value(rounding=ROUND_HALF_UP)
-
-                # ✅ Residuo exacto (entero) para cuadrar la suma total
                 residuo = financiar - (valor_base * n)
 
-                # Guardamos en contrato la cuota pactada (entera) y fechas
                 contrato.valor_cuota_pactada = valor_base
                 contrato.estado = 'Activo'
                 contrato.fecha_inicio = fecha_inicio
                 contrato.fecha_fin = add_months(fecha_inicio, n - 1)
                 contrato.save()
 
-                # =========================
-                # CUOTAS (COP ENTEROS) basadas en financiar
-                # =========================
+                # CUOTA 0: cuota inicial pagada + RC + aplicación
+                if registrar_ci_on and cuota_inicial > 0:
+                    medio_ci_id = (request.POST.get('pago_cuota_inicial_medio_pago_id') or '').strip()
+                    ref_ci = (request.POST.get('pago_cuota_inicial_referencia') or '').strip()
+                    fac_ci = (request.POST.get('pago_cuota_inicial_numero_factura') or '').strip() or None
+                    obs_ci = (request.POST.get('pago_cuota_inicial_observacion') or '').strip() or None
+
+                    medio_ci = MedioPago.objects.filter(id=medio_ci_id, activo=True).first()
+                    if not medio_ci:
+                        raise ValueError('El medio de pago de la cuota inicial no es válido o está inactivo.')
+
+                    cuota0 = Cuota.objects.create(
+                        contrato=contrato,
+                        numero=0,
+                        fecha_vencimiento=fecha_inicio,
+                        valor=cuota_inicial,
+                        valor_pagado=cuota_inicial,
+                        estado='Pagada'
+                    )
+
+                    ingreso_ci = Ingreso.objects.create(
+                        sede=estudiante.sede,
+                        concepto_ingreso=ConceptoIngreso.objects.get(pk=7),
+                        valor_pagado=cuota_inicial,
+                        fecha_pago=now().date(),
+                        referencia=ref_ci or None,
+                        observacion=obs_ci,
+                        tipo_registro='CUOTA_INICIAL',
+                        usuario_registro=request.user,
+                        contrato=contrato,
+                        cuota=cuota0,
+                        numero_factura=fac_ci,
+                        numero_comprobante=generar_rc(request, estudiante.sede),
+                        medio_pago=medio_ci,
+                        estado='ACTIVO'
+                    )
+
+                    PagoAplicacion.objects.create(
+                        ingreso=ingreso_ci,
+                        cuota=cuota0,
+                        usuario_id=request.user.id,
+                        fecha_aplicacion=now(),
+                        valor_aplicado=cuota_inicial,
+                        forma_pago=medio_ci.nombre,
+                        numero_factura=fac_ci,
+                        referencia=ref_ci or None,
+                        observacion=obs_ci
+                    )
+
+                # CUOTAS (1..n)
                 for i in range(1, n + 1):
                     vence = add_months(fecha_inicio, i - 1)
                     valor_i = valor_base
-
-                    # ✅ Ajuste del residuo solo en la última cuota
                     if i == n and residuo != Decimal('0'):
                         valor_i = valor_base + residuo
 
@@ -1317,11 +1619,7 @@ def nuevo_contrato(request):
         except Exception as e:
             contrato_form.add_error(None, f'No se pudo crear el contrato: {e}')
 
-        return render(request, 'nuevo_contrato.html', {
-            'form_acudiente': acudiente_form,
-            'form_estudiante': estudiante_form,
-            'form_contrato': contrato_form,
-        })
+        return _render_nuevo_contrato_error(acudiente_form, estudiante_form, contrato_form)
 
     # =========================
     # GET
@@ -1410,4 +1708,318 @@ def nuevo_ingreso(request):
     return render(request, 'nuevo_ingreso.html', {
         'form': form,
         'ingresos': ingresos,
+    })
+
+
+@login_required
+def reporte_ingresos_manuales(request):
+    """Reporte para conciliación de ingresos MANUALES.
+
+    Alcance:
+    - Solo ingresos creados desde el formulario (tipo_registro='otro_ingreso').
+    - Muestra todos los campos relevantes para auditoría/conciliación (RC, factura, referencia, observación,
+      medio de pago, sede, usuario, concepto, estado y datos de anulación).
+    - Respeta seguridad por sede con `user_sede_ids`.
+
+    Filtros (GET):
+    - q: búsqueda libre (RC, factura, referencia, observación, usuario)
+    - estado: ACTIVO / ANULADO / ''
+    - sede: (solo si el usuario NO está restringido por sedes)
+    - medio_pago_id
+    - concepto_id
+    - fecha_desde / fecha_hasta (YYYY-MM-DD)
+    - per_page
+    """
+    sede_ids = user_sede_ids(request.user)
+
+    q_text = (request.GET.get('q') or '').strip()
+    estado = (request.GET.get('estado') or '').strip()
+    fecha_desde = (request.GET.get('fecha_desde') or '').strip()
+    fecha_hasta = (request.GET.get('fecha_hasta') or '').strip()
+    medio_pago_id = (request.GET.get('medio_pago_id') or '').strip()
+    concepto_id = (request.GET.get('concepto_id') or '').strip()
+
+    # Si el usuario NO está restringido por sede_ids, se permite filtrar por sede desde GET
+    sede_id = (request.GET.get('sede') or '').strip() if not sede_ids else ''
+
+    try:
+        per_page = int(request.GET.get('per_page', 50))
+    except ValueError:
+        per_page = 50
+    page = request.GET.get('page', 1)
+
+    qs = (
+        Ingreso.objects
+        .filter(tipo_registro='otro_ingreso')
+        .select_related(
+            'sede',
+            'usuario_registro',
+            'usuario_anulacion',
+            'medio_pago',
+            'concepto_ingreso',
+            'contrato',
+            'cuota',
+        )
+        .order_by('-fecha_pago', '-id')
+    )
+
+    # Seguridad por sede
+    if sede_ids:
+        qs = qs.filter(sede_id__in=sede_ids)
+
+    # Filtro por sede (solo si el user NO está restringido)
+    if sede_id:
+        qs = qs.filter(sede_id=sede_id)
+
+    # Estado
+    if estado:
+        qs = qs.filter(estado=estado)
+
+    # Rango de fechas
+    if fecha_desde:
+        qs = qs.filter(fecha_pago__gte=fecha_desde)
+    if fecha_hasta:
+        qs = qs.filter(fecha_pago__lte=fecha_hasta)
+
+    # Medio pago / concepto
+    if medio_pago_id:
+        qs = qs.filter(medio_pago_id=medio_pago_id)
+    if concepto_id:
+        qs = qs.filter(concepto_ingreso_id=concepto_id)
+
+    # Texto libre: RC, factura, referencia, observación, usuario
+    if q_text:
+        qs = qs.filter(
+            Q(numero_comprobante__icontains=q_text) |
+            Q(numero_factura__icontains=q_text) |
+            Q(referencia__icontains=q_text) |
+            Q(observacion__icontains=q_text) |
+            Q(usuario_registro__username__icontains=q_text)
+        ).distinct()
+
+    # Catálogos para filtros
+    medios = list(MedioPago.objects.filter(activo=True).order_by('nombre'))
+    conceptos = list(ConceptoIngreso.objects.all().order_by('nombre'))
+    sedes = [] if sede_ids else list(Sede.objects.all().order_by('nombre'))
+
+    paginator = Paginator(qs, per_page)
+    page_obj = paginator.get_page(page)
+
+    context = {
+        'ingresos': page_obj.object_list,
+        'page_obj': page_obj,
+        'paginator': paginator,
+        'per_page_options': [25, 50, 100, 200],
+        # filtros activos
+        'q': q_text,
+        'estado': estado,
+        'fecha_desde': fecha_desde,
+        'fecha_hasta': fecha_hasta,
+        'medio_pago_id': medio_pago_id,
+        'concepto_id': concepto_id,
+        'sede_id': sede_id,
+        'per_page': per_page,
+
+        # catálogos
+        'medios': medios,
+        'conceptos': conceptos,
+        'sedes': sedes,
+
+        # columnas sugeridas para el template (conciliación)
+        'columns': [
+            'id', 'fecha_pago', 'numero_comprobante', 'valor_pagado', 'medio_pago',
+            'numero_factura', 'referencia', 'observacion', 'concepto_ingreso',
+            'sede', 'usuario_registro', 'estado', 'fecha_anulacion', 'motivo_anulacion', 'usuario_anulacion'
+        ],
+    }
+
+    return render(request, 'reporte_ingresos.html', context)
+
+@login_required
+def buscar_estudiante(request):
+    """
+    Buscador puntual para Secretaría:
+    - No lista al entrar (solo busca si viene ?q=...)
+    - Muestra la MISMA info de listar_estudiantes (KPIs/annotations)
+    - Máximo 10 resultados
+    - Sin paginación
+    - Restringido por sedes del usuario
+    """
+    hoy = now().date()
+    sede_ids = user_sede_ids(request.user)
+
+    LIMIT_RESULTADOS = 10
+
+    # Si el usuario no tiene sedes asignadas, no puede operar el buscador
+    if not sede_ids:
+        return render(request, 'buscar_estudiante.html', {
+            'q': '',
+            'buscado': False,
+            'resultados': [],
+            'error': 'Tu usuario no tiene sede asignada. Contacta al administrador.',
+        })
+
+    q_text = (request.GET.get('q') or '').strip()
+    buscado = bool(q_text)
+
+    resultados = []
+    if buscado:
+        # --------- Subqueries/KPIs por estudiante (IGUAL QUE listar_estudiantes) ---------
+        contrato_valor_sq = Subquery(
+            Contrato.objects
+            .filter(estudiante_id=OuterRef('pk'))
+            .order_by('-id')
+            .values('valor_total')[:1],
+            output_field=DecimalField(max_digits=12, decimal_places=2)
+        )
+
+        numero_cuotas_sq = Subquery(
+            Cuota.objects
+            .filter(contrato__estudiante_id=OuterRef('pk'))
+            .exclude(numero=0)
+            .values('contrato__estudiante_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField()
+        )
+
+        cuotas_pagadas_sq = Subquery(
+            Cuota.objects
+            .filter(contrato__estudiante_id=OuterRef('pk'), estado='Pagada')
+            .exclude(numero=0)
+            .values('contrato__estudiante_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField()
+        )
+
+        cuotas_vencidas_sq = Subquery(
+            Cuota.objects
+            .filter(
+                contrato__estudiante_id=OuterRef('pk'),
+                fecha_vencimiento__lt=hoy,
+                estado__in=['Parcial', 'Vencida'],
+            )
+            .exclude(numero=0)
+            .values('contrato__estudiante_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField()
+        )
+
+        total_pagado_sq = Subquery(
+            PagoAplicacion.objects
+            .filter(cuota__contrato__estudiante_id=OuterRef('pk'), ingreso__estado='ACTIVO')
+            .values('cuota__contrato__estudiante_id')
+            .annotate(total=Coalesce(Sum('valor_aplicado'), Value(Decimal('0.00'))))
+            .values('total')[:1],
+            output_field=DecimalField(max_digits=12, decimal_places=2)
+        )
+
+        saldo_total_sq = Subquery(
+            Cuota.objects
+            .filter(contrato__estudiante_id=OuterRef('pk'))
+            .exclude(numero=0)
+            .values('contrato__estudiante_id')
+            .annotate(
+                total_valor=Coalesce(
+                    Sum('valor'),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                ),
+                total_pagado=Coalesce(
+                    Sum(
+                        'aplicaciones__valor_aplicado',
+                        filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                    ),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                ),
+            )
+            .annotate(total=F('total_valor') - F('total_pagado'))
+            .values('total')[:1],
+            output_field=DecimalField(max_digits=12, decimal_places=2)
+        )
+
+        cuotas_parciales_sq = Subquery(
+            Cuota.objects
+            .filter(contrato__estudiante_id=OuterRef('pk'), estado='Parcial')
+            .exclude(numero=0)
+            .values('contrato__estudiante_id')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField()
+        )
+
+        proximo_vto_sq = Subquery(
+            Cuota.objects
+            .filter(contrato__estudiante_id=OuterRef('pk'))
+            .exclude(numero=0)
+            .annotate(
+                pagado=Coalesce(
+                    Sum(
+                        'aplicaciones__valor_aplicado',
+                        filter=Q(aplicaciones__ingreso__estado='ACTIVO')
+                    ),
+                    Value(Decimal('0.00')),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                )
+            )
+            .annotate(saldo=F('valor') - F('pagado'))
+            .filter(saldo__gt=0)
+            .order_by('fecha_vencimiento')
+            .values('fecha_vencimiento')[:1]
+        )
+
+        qs = (
+            Estudiante.objects
+            .select_related('nivel', 'sede', 'acudiente', 'horario')
+            .filter(sede_id__in=sede_ids)
+            .annotate(
+                contrato_valor=Coalesce(contrato_valor_sq, Value(Decimal('0.00'))),
+                numero_cuotas=Coalesce(numero_cuotas_sq, Value(0)),
+                cuotas_pagadas=Coalesce(cuotas_pagadas_sq, Value(0)),
+                cuotas_vencidas=Coalesce(cuotas_vencidas_sq, Value(0)),
+                total_pagado=Coalesce(total_pagado_sq, Value(Decimal('0.00'))),
+                saldo_total=Coalesce(saldo_total_sq, Value(Decimal('0.00'))),
+                cuotas_parciales=Coalesce(cuotas_parciales_sq, Value(0)),
+                proximo_vto=proximo_vto_sq,
+            )
+            .annotate(
+                en_mora=Case(
+                    When(Q(saldo_total__gt=0) & Q(proximo_vto__lt=hoy), then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField()
+                )
+            )
+            .annotate(
+                estado_cartera=Case(
+                    When(en_mora=True, then=Value('En mora')),
+                    default=Value('Al día'),
+                )
+            )
+            .order_by('-id')
+        )
+
+        # Búsqueda: estudiante/acudiente/documento + ID numérico
+        filtros = (
+            Q(nombre_completo__icontains=q_text) |
+            Q(documento__icontains=q_text) |
+            Q(acudiente__nombre_completo__icontains=q_text) |
+            Q(acudiente__documento__icontains=q_text)
+        )
+        if q_text.isdigit():
+            qs = qs.filter(Q(id=int(q_text)) | filtros)
+        else:
+            qs = qs.filter(filtros)
+
+        resultados = list(qs[:LIMIT_RESULTADOS])
+
+    return render(request, 'buscar_estudiante.html', {
+        'q': q_text,
+        'buscado': buscado,
+        'resultados': resultados,
+        'error': None,
+        'hoy': hoy,
+        'limit': LIMIT_RESULTADOS,
     })

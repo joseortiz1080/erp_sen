@@ -453,6 +453,8 @@ class Ingreso(models.Model):
 
     def __str__(self):
         return f"Ingreso #{self.id} - {self.valor_pagado} ({self.fecha_pago}) [{self.estado}]"
+
+
 class Perfil(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
 

@@ -194,16 +194,16 @@
                 {% endfor %}
               </div>
               <div class="col-12">
-                <label class="form-label">Observación</label>
-                {{ form_estudiante.observacion|add_class:"form-control"|attr:"rows:4,placeholder:Notas u observaciones relevantes" }}
-                {% for error in form_estudiante.observacion.errors %}
+                <label class="form-label">Horario</label>
+                {{ form_estudiante.horario|add_class:"form-select" }}
+                {% for error in form_estudiante.horario.errors %}
                   <div class="text-danger small">{{ error }}</div>
                 {% endfor %}
               </div>
               <div class="col-12">
-                <label class="form-label">Horario</label>
-                {{ form_estudiante.horario|add_class:"form-select" }}
-                {% for error in form_estudiante.horario.errors %}
+                <label class="form-label">Observación</label>
+                {{ form_estudiante.observacion|add_class:"form-control"|attr:"rows:4,placeholder:Notas u observaciones relevantes" }}
+                {% for error in form_estudiante.observacion.errors %}
                   <div class="text-danger small">{{ error }}</div>
                 {% endfor %}
               </div>
@@ -235,15 +235,35 @@
             <label class="form-label">Valor total</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
-              {{ form_contrato.valor_total|add_class:"form-control text-end" }}
+              {{ form_contrato.valor_total|add_class:"form-control text-end"|attr:"id:valor_total" }}
             </div>
-            {% for error in form_contrato.valor_total.errors %}
-              <div class="text-danger small">{{ error }}</div>
-            {% endfor %}
+            {% if not registrar_ci_on %}
+              {% for error in form_contrato.valor_total.errors %}
+                <div class="text-danger small">{{ error }}</div>
+              {% endfor %}
+            {% endif %}
           </div>
 
-          <!-- 2) Cuota inicial -->
-          <div class="col-12 col-md-4">
+          <!-- Switch: Registrar cuota inicial -->
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                id="registrar_cuota_inicial"
+                name="registrar_cuota_inicial"
+                value="1"
+                {% if registrar_ci_on %}checked{% endif %}
+              >
+              <label class="form-check-label" for="registrar_cuota_inicial">
+                Registrar Cuota inicial
+              </label>
+            </div>
+            <div class="form-text">Activa esta opción solo si vas a registrar el pago de la cuota inicial en este momento. Si está desactivado, el valor a financiar será igual al valor total.</div>
+          </div>
+
+          <!-- 2) Cuota inicial (solo si el switch está ON) -->
+          <div id="wrap_cuota_inicial" class="col-12 col-md-4 {% if not registrar_ci_on %}d-none{% endif %}">
             <label class="form-label">Cuota inicial</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
@@ -254,11 +274,15 @@
                 class="form-control text-end"
                 min="0"
                 step="1"
-                value="0"
+                value="{{ cuota_inicial_value|default:'0' }}"
                 placeholder="0"
+                {% if not registrar_ci_on %}disabled{% endif %}
               >
             </div>
-            <div class="form-text">Opcional. Si no aplica, deje en 0.</div>
+            <div class="form-text">Requerida si activas “Registrar Cuota inicial”. Si dejas 0, el sistema no permitirá el guardado</div>
+            {% if error_cuota_inicial %}
+              <div class="text-danger small">{{ error_cuota_inicial }}</div>
+            {% endif %}
           </div>
 
           <!-- 3) Valor a financiar -->
@@ -275,13 +299,29 @@
                 readonly
               >
             </div>
-            <div class="form-text">Se calcula: Valor total - Cuota inicial.</div>
+            <div class="form-text">
+              <span id="help_valor_financiar_on" class="d-none">En modo ON, se calcula: Valor total - Cuota inicial.</span>
+            </div>
           </div>
 
+<div id="nota_cuota_inicial_off" class="col-12">
+</div>
+<div id="nota_cuota_inicial_on" class="col-12 d-none">
+  <div class="alert alert-info py-2 mb-0 small">
+    <strong>Modo ON:</strong> si la cuota inicial es mayor a 0, se registrará el ingreso (RC) y se creará la cuota 0 asociada al contrato.
+  </div>
+</div>
+
+<div id="bbloque_cuota" class="col-12">
+  <div class="mt-3 p-3 border rounded-3 bg-light">
+    <div class="row g-3">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+      <h6 class="badge bg-primary mb-0"> Datos del Financiamiento</h6>
+    </div>
           <!-- 4) Número de cuotas -->
           <div class="col-12 col-md-4">
             <label class="form-label">Número de cuotas</label>
-            {{ form_contrato.numero_cuotas|add_class:"form-select" }}
+            {{ form_contrato.numero_cuotas|add_class:"form-select"|attr:"id:numero_cuotas" }}
             {% for error in form_contrato.numero_cuotas.errors %}
               <div class="text-danger small">{{ error }}</div>
             {% endfor %}
@@ -292,7 +332,7 @@
             <label class="form-label">Valor cuota pactada</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
-              {{ form_contrato.valor_cuota_pactada|add_class:"form-control text-end bg-light"|attr:"type:text,readonly:readonly" }}
+              {{ form_contrato.valor_cuota_pactada|add_class:"form-control text-end bg-white"|attr:"id:valor_cuota_pactada,type:text,readonly:readonly" }}
             </div>
             {% for error in form_contrato.valor_cuota_pactada.errors %}
               <div class="text-danger small">{{ error }}</div>
@@ -312,7 +352,7 @@
           <!-- Fecha inicio -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha inicio</label>
-            {{ form_contrato.fecha_inicio|add_class:"form-control bg-light"|attr:"readonly:readonly" }}
+            {{ form_contrato.fecha_inicio|add_class:"form-control bg-white"|attr:"id:fecha_inicio,readonly:readonly" }}
             <div class="form-text">Se calcula automáticamente según el día de corte.</div>
             {% for error in form_contrato.fecha_inicio.errors %}
               <div class="text-danger small">{{ error }}</div>
@@ -322,12 +362,110 @@
           <!-- Fecha fin -->
           <div class="col-12 col-md-4">
             <label class="form-label">Fecha fin</label>
-            {{ form_contrato.fecha_fin|add_class:"form-control bg-light"|attr:"readonly:readonly" }}
+            {{ form_contrato.fecha_fin|add_class:"form-control bg-white"|attr:"id:fecha_fin,readonly:readonly" }}
             <div class="form-text">Se calcula automáticamente según el número de cuotas.</div>
             {% for error in form_contrato.fecha_fin.errors %}
               <div class="text-danger small">{{ error }}</div>
             {% endfor %}
           </div>
+    </div>
+  </div>
+</div>
+<!-- =========================
+     BLOQUE CONDICIONAL: PAGO CUOTA INICIAL (MOVIDO AL FINAL)
+     (Se habilita cuando el switch está ON y cuota_inicial > 0, vía JS)
+========================= -->
+
+<div id="bloque_pago_cuota_inicial" class="col-12 {% if not registrar_ci_on %}d-none{% endif %}">
+  <div class="mt-3 p-3 border rounded-3 bg-light">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <h6 class="badge bg-primary mb-0"> Datos del pago de la cuota inicial</h6>
+    </div>
+
+    <div class="row g-3">
+      <!-- Flag de control (0/1) -->
+      <input type="hidden" name="pago_cuota_inicial" id="pago_cuota_inicial" value="{{ pago_cuota_inicial|default:'0' }}">
+
+      <!-- Medio de pago (catálogo) -->
+      <div class="col-12 col-md-4">
+        <label class="form-label">Medio de pago <span class="text-danger">*</span></label>
+        <select
+          class="form-select {% if error_pago_cuota_inicial_medio %}is-invalid{% endif %}"
+          name="pago_cuota_inicial_medio_pago_id"
+          id="pago_cuota_inicial_medio_pago_id"
+          data-medios-url="{% url 'listar_medios_pago' %}"
+          data-selected="{{ pago_cuota_inicial_medio_pago_id|default:'' }}"
+          required
+          {% if not registrar_ci_on %}disabled{% endif %}
+        >
+          <option value="" {% if not pago_cuota_inicial_medio_pago_id %}selected{% endif %}>Seleccione...</option>
+        </select>
+        {% if error_pago_cuota_inicial_medio %}
+          <div class="invalid-feedback d-block">{{ error_pago_cuota_inicial_medio }}</div>
+        {% endif %}
+      </div>
+
+      <!-- Referencia -->
+      <div class="col-12 col-md-4">
+        <label class="form-label">Referencia <span class="text-danger">*</span></label>
+        <input
+          type="text"
+          class="form-control {% if error_pago_cuota_inicial_referencia %}is-invalid{% endif %}"
+          name="pago_cuota_inicial_referencia"
+          id="pago_cuota_inicial_referencia"
+          maxlength="100"
+          placeholder="Ej. NEQUI-12345 / TRANSF-ABCD / EFECTIVO"
+          value="{{ pago_cuota_inicial_referencia|default:'' }}"
+          required
+          {% if not registrar_ci_on %}disabled{% endif %}
+        >
+        {% if error_pago_cuota_inicial_referencia %}
+          <div class="invalid-feedback d-block">{{ error_pago_cuota_inicial_referencia }}</div>
+        {% endif %}
+      </div>
+
+      <!-- Número factura -->
+      <div class="col-12 col-md-4">
+        <label class="form-label">Número de factura (opcional)</label>
+        <input
+          type="text"
+          class="form-control"
+          name="pago_cuota_inicial_numero_factura"
+          id="pago_cuota_inicial_numero_factura"
+          maxlength="30"
+          placeholder="Ej. FAC-001"
+          value="{{ pago_cuota_inicial_numero_factura|default:'' }}"
+          {% if not registrar_ci_on %}disabled{% endif %}
+        >
+      </div>
+
+      <!-- Observación -->
+      <div class="col-12">
+        <label class="form-label">Observación (opcional)</label>
+        <textarea
+          class="form-control"
+          name="pago_cuota_inicial_observacion"
+          id="pago_cuota_inicial_observacion"
+          rows="2"
+          placeholder="Notas del pago de cuota inicial"
+          {% if not registrar_ci_on %}disabled{% endif %}
+        >{{ pago_cuota_inicial_observacion|default:'' }}</textarea>
+      </div>
+
+      <div class="col-12">
+        <div class="alert alert-info py-2 mb-0 small">
+          Este bloque se habilita cuando activas <strong>Registrar Cuota inicial</strong>.
+          Los campos marcados con <strong>*</strong> serán obligatorios.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- =========================
+     FIN BLOQUE CONDICIONAL
+========================= -->
 
         </div>
       </div>

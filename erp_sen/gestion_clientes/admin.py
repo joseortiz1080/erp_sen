@@ -133,14 +133,14 @@ class PagoAdmin(admin.ModelAdmin):
     Extra: al guardar, se crea/actualiza automáticamente PagoAplicacion
     para mantener el nuevo esquema consistente.
     """
-    list_display = ('contrato', 'fecha_pago', 'valor_pagado', 'forma_pago', 'referencia', 'numero_factura')
-    list_filter = ('fecha_pago', 'forma_pago')
+    list_display = ('contrato', 'fecha_pago', 'valor_pagado', 'referencia', 'numero_factura')
+    list_filter = ('fecha_pago',)
     search_fields = ('contrato__estudiante__nombre_completo', 'referencia', 'numero_factura')
     autocomplete_fields = ('contrato', 'cuota')
     save_on_top = True
 
     fields = (
-        'contrato', 'cuota', 'fecha_pago', 'valor_pagado', 'forma_pago',
+        'contrato', 'cuota', 'fecha_pago', 'valor_pagado',
         'observacion', 'referencia', 'numero_factura'
     )
 
