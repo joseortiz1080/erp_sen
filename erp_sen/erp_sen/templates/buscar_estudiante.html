@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% load filtros_monetarios %}
+
+{% block content %}
+
+<div class="container-fluid py-3">
+
+  <h4 class="mb-3">Búsqueda de estudiante</h4>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <!-- =========================
+      FORMULARIO DE BÚSQUEDA
+      ========================= -->
+  <form method="get" class="row g-2 align-items-end mb-3">
+    <div class="col-12 col-md-8">
+      <label class="form-label">Buscar (documento, nombre, acudiente)</label>
+      <input
+        type="text"
+        name="q"
+        value="{{ q }}"
+        class="form-control"
+        placeholder="Ej: 10223344 / Juan / María Pérez"
+      >
+    </div>
+    <div class="col-12 col-md-4">
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary w-100" type="submit">Buscar</button>
+        <a class="btn btn-outline-secondary w-100" href="{{ request.path }}">Limpiar</a>
+      </div>
+</div>
+  </form>
+
+  {% if not buscado %}
+    <div class="alert alert-secondary">
+      Ingresa un criterio de búsqueda para ver resultados.
+      <br>
+    </div>
+  {% else %}
+
+  <!-- =========================
+      RESULTADOS (MISMO FORMATO CxC)
+      ========================= -->
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h5 class="mb-0">Resultados</h5>
+        <span class="text-muted small">
+          {{ resultados|length }} encontrados (máx. 10)
+        </span>
+      </div>
+
+      <table class="table table-hover table-sm align-middle mb-0">
+
+        <!-- HEADER OSCURO (IGUAL CxC) -->
+        <thead class="table-dark align-middle">
+          <tr class="text-center">
+            <th style="width:70px">ID</th>
+            <th>Estudiante</th>
+            <th>Acudiente</th>
+            <th>Nivel</th>
+            <th>Horario</th>
+            <th>Sede</th>
+            <th class="text-center">Valor<br>contrato</th>
+            <th class="text-center">#<br>Cuotas</th>
+            <th class="text-center">Cuotas<br>parciales</th>
+            <th class="text-center">Cuotas<br>pagadas</th>
+            <th class="text-center">Cuotas<br>vencidas</th>
+            <th class="text-center">Total<br>pagado</th>
+            <th class="text-center">Saldo por<br>pagar</th>
+            <th>Próximo<br>vencimiento</th>
+            <th class="text-center">Estado<br>cartera</th>
+            <th class="text-center" style="width:90px">Acciones</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {% for e in resultados %}
+            <tr class="align-middle text-center">
+
+              <td class="fw-semibold">{{ e.id }}</td>
+
+              <td class="text-wrap">{{ e.nombre_completo }}</td>
+
+              <td class="text-wrap">{{ e.acudiente.nombre_completo }}</td>
+
+              <td class="text-wrap">{{ e.nivel.nombre }}</td>
+
+              <td class="text-wrap">{{ e.horario.descripcion }}</td>
+
+              <td class="text-wrap">{{ e.sede.nombre }}</td>
+
+              <td class="text-center">
+                {{ e.contrato_valor|moneda_puntos }}
+              </td>
+
+              <td class="text-center">{{ e.numero_cuotas }}</td>
+
+              <td class="text-center">{{ e.cuotas_parciales }}</td>
+
+              <td class="text-center">{{ e.cuotas_pagadas }}</td>
+
+              <td class="text-center">{{ e.cuotas_vencidas }}</td>
+
+              <td class="text-center">
+                {{ e.total_pagado|moneda_puntos }}
+              </td>
+
+              <td class="text-center fw-semibold">
+                {{ e.saldo_total|moneda_puntos }}
+              </td>
+
+              <td>
+                {% if e.proximo_vto %}
+                  {{ e.proximo_vto|date:"M d, Y" }}
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                {% if e.en_mora %}
+                  <span class="badge bg-danger">En mora</span>
+                {% else %}
+                  <span class="badge bg-success">Al día</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                <a
+                  href="{% url 'detalle_estudiante' e.id %}"
+                  class="btn btn-sm btn-outline-primary"
+                  title="Ver detalle"
+                >
+                  🔍
+                </a>
+              </td>
+
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="16" class="text-center text-muted py-4">
+                No se encontraron estudiantes con ese criterio.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+
+      </table>
+
+      <div class="text-muted small mt-2">
+        Nota: esta vista está limitada a máximo 10 resultados y solo muestra información según las sedes permitidas.
+      </div>
+
+    </div>
+  </div>
+
+  {% endif %}
+
+</div>
+
+{% endblock %}

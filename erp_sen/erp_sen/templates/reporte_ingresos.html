@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container-fluid py-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h3 class="mb-0">Reporte de ingresos</h3>
+      <div class="text-muted">Tabla: <code>gestion_financiera_ingreso</code></div>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{% url 'nuevo_ingreso' %}" class="btn btn-outline-primary">Registrar ingreso</a>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <form method="get" class="card mb-3">
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12 col-md-3">
+          <label class="form-label">Búsqueda (RC / Factura / Ref / Usuario)</label>
+          <input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Ej: RC-1-2025-00000012">
+        </div>
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Tipo registro</label>
+          <select name="tipo_registro" class="form-select">
+            <option value="">Todos</option>
+            <option value="pago_cuota" {% if tipo_registro == 'pago_cuota' %}selected{% endif %}>Pago de cuota</option>
+            <option value="otro_ingreso" {% if tipo_registro == 'otro_ingreso' %}selected{% endif %}>Otro ingreso</option>
+          </select>
+        </div>
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Estado</label>
+          <select name="estado" class="form-select">
+            <option value="">Todos</option>
+            <option value="ACTIVO" {% if estado == 'ACTIVO' %}selected{% endif %}>ACTIVO</option>
+            <option value="ANULADO" {% if estado == 'ANULADO' %}selected{% endif %}>ANULADO</option>
+          </select>
+        </div>
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Medio de pago</label>
+          <select name="medio_pago_id" class="form-select">
+            <option value="">Todos</option>
+            {% for m in medios %}
+              <option value="{{ m.id }}" {% if medio_pago_id|slugify == m.id|slugify %}selected{% endif %}>{{ m.nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% if sedes %}
+        <div class="col-12 col-md-3">
+          <label class="form-label">Sede</label>
+          <select name="sede" class="form-select">
+            <option value="">Todas</option>
+            {% for s in sedes %}
+              <option value="{{ s.id }}" {% if sede_id|slugify == s.id|slugify %}selected{% endif %}>{{ s.nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Fecha desde</label>
+          <input type="date" name="fecha_desde" value="{{ fecha_desde }}" class="form-control">
+        </div>
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Fecha hasta</label>
+          <input type="date" name="fecha_hasta" value="{{ fecha_hasta }}" class="form-control">
+        </div>
+
+        <div class="col-12 col-md-2">
+          <label class="form-label">Registros</label>
+          <select name="per_page" class="form-select">
+            {% with pp=per_page|default:"25"|slugify %}
+              <option value="25" {% if pp == "25" %}selected{% endif %}>25</option>
+              <option value="50" {% if pp == "50" %}selected{% endif %}>50</option>
+              <option value="100" {% if pp == "100" %}selected{% endif %}>100</option>
+              <option value="200" {% if pp == "200" %}selected{% endif %}>200</option>
+            {% endwith %}
+          </select>
+        </div>
+
+        <div class="col-12 col-md-4 d-flex align-items-end gap-2">
+          <button class="btn btn-primary" type="submit">Filtrar</button>
+          <a class="btn btn-outline-secondary" href="{% url 'reporte_ingresos_manuales' %}">Limpiar</a>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <!-- Tabla -->
+  <div class="card">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width: 90px;">ID</th>
+              <th style="width: 140px;">Fecha</th>
+              <th style="width: 220px;">RC</th>
+              <th style="width: 140px;">Valor</th>
+              <th style="width: 160px;">Medio</th>
+              <th style="width: 140px;">Factura</th>
+              <th>Referencia / Observación</th>
+              <th style="width: 140px;">Tipo</th>
+              <th style="width: 120px;">Estado</th>
+              <th style="width: 160px;">Sede</th>
+              <th style="width: 160px;">Usuario</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ing in ingresos %}
+              <tr>
+                <td class="fw-semibold">#{{ ing.id }}</td>
+                <td>{{ ing.fecha_pago|date:"Y-m-d" }}</td>
+                <td><code>{{ ing.numero_comprobante|default:"—" }}</code></td>
+                <td class="fw-semibold">${{ ing.valor_pagado }}</td>
+                <td>{{ ing.medio_pago.nombre|default:"—" }}</td>
+                <td>{{ ing.numero_factura|default:"—" }}</td>
+                <td>
+                  <div class="small text-muted">Ref: {{ ing.referencia|default:"—" }}</div>
+                  <div class="small">{{ ing.observacion|default:"" }}</div>
+                </td>
+                <td>{{ ing.get_tipo_registro_display|default:ing.tipo_registro }}</td>
+                <td>
+                  {% if ing.estado == "ACTIVO" %}
+                    <span class="badge bg-success">ACTIVO</span>
+                  {% else %}
+                    <span class="badge bg-danger">ANULADO</span>
+                  {% endif %}
+                </td>
+                <td>{{ ing.sede.nombre|default:"—" }}</td>
+                <td>{{ ing.usuario_registro.username|default:"—" }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="11" class="text-center py-4 text-muted">No hay ingresos con los filtros actuales.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Paginación -->
+    <div class="card-footer d-flex align-items-center justify-content-between">
+      <div class="text-muted small">
+        Página {{ page_obj.number }} de {{ paginator.num_pages }}
+      </div>
+
+      <nav>
+        <ul class="pagination mb-0">
+          {% if page_obj.has_previous %}
+            <li class="page-item">
+              <a class="page-link"
+                 href="?page={{ page_obj.previous_page_number }}&q={{ q }}&tipo_registro={{ tipo_registro }}&estado={{ estado }}&fecha_desde={{ fecha_desde }}&fecha_hasta={{ fecha_hasta }}&medio_pago_id={{ medio_pago_id }}&sede={{ sede_id }}&per_page={{ per_page }}">
+                ←
+              </a>
+            </li>
+          {% else %}
+            <li class="page-item disabled"><span class="page-link">←</span></li>
+          {% endif %}
+
+          <li class="page-item disabled"><span class="page-link">{{ page_obj.number }}</span></li>
+
+          {% if page_obj.has_next %}
+            <li class="page-item">
+              <a class="page-link"
+                 href="?page={{ page_obj.next_page_number }}&q={{ q }}&tipo_registro={{ tipo_registro }}&estado={{ estado }}&fecha_desde={{ fecha_desde }}&fecha_hasta={{ fecha_hasta }}&medio_pago_id={{ medio_pago_id }}&sede={{ sede_id }}&per_page={{ per_page }}">
+                →
+              </a>
+            </li>
+          {% else %}
+            <li class="page-item disabled"><span class="page-link">→</span></li>
+          {% endif %}
+        </ul>
+      </nav>
+    </div>
+  </div>
+</div>
+{% endblock %}

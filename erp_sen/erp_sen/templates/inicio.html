@@ -1,8 +1,75 @@
 {% extends 'base.html' %}
 
+{% block title %}Inicio | SEN Idiomas{% endblock %}
+
 {% block content %}
-  <div class="container mt-5">
-    <h2>Bienvenido a SEN Idiomas</h2>
-    <p>Has iniciado sesión correctamente.</p>
+<div class="container mt-4">
+
+  <h2 class="mb-2">Bienvenido a SEN Idiomas</h2>
+  <p class="text-muted mb-4">Selecciona una opción para continuar</p>
+
+  <div class="row g-4">
+
+    <!-- Dashboard -->
+    <div class="col-12 col-sm-6 col-lg-3">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <h5 class="card-title">Dashboard</h5>
+          <p class="card-text text-muted flex-grow-1">
+            Vista general del sistema y accesos rápidos.
+          </p>
+          <a href="{% url 'dashboard' %}" class="btn btn-primary btn-sm mt-auto">
+            Ir al dashboard
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Estudiantes -->
+    <div class="col-12 col-sm-6 col-lg-3">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <h5 class="card-title">Estudiantes</h5>
+          <p class="card-text text-muted flex-grow-1">
+            Consulta estudiantes y su información financiera.
+          </p>
+          <a href="{% url 'listar_estudiantes' %}" class="btn btn-primary btn-sm mt-auto">
+            Ver estudiantes
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nuevo contrato -->
+    <div class="col-12 col-sm-6 col-lg-3">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <h5 class="card-title">Nuevo contrato</h5>
+          <p class="card-text text-muted flex-grow-1">
+            Registra un nuevo contrato para un estudiante.
+          </p>
+          <a href="{% url 'nuevo_contrato' %}" class="btn btn-success btn-sm mt-auto">
+            Crear contrato
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reportar ingreso -->
+    <div class="col-12 col-sm-6 col-lg-3">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <h5 class="card-title">Reportar ingreso</h5>
+          <p class="card-text text-muted flex-grow-1">
+            Registra pagos e ingresos en el sistema.
+          </p>
+          <a href="{% url 'nuevo_ingreso' %}" class="btn btn-warning btn-sm mt-auto">
+            Reportar ingreso
+          </a>
+        </div>
+      </div>
+    </div>
+
   </div>
+</div>
 {% endblock %}

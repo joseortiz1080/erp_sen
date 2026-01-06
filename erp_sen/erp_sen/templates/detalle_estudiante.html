@@ -34,75 +34,111 @@
     <!-- Perfil -->
     <div class="card shadow-sm">
       <div class="card-body">
+        <div class="accordion" id="perfilEstudianteAccordion">
+          <!-- Item 1: Datos del estudiante -->
+          <div class="accordion-item">
+            <h2 class="accordion-header" id="headingPerfilEstudiante">
+              <button class="accordion-button" type="button"
+                      data-bs-toggle="collapse"
+                      data-bs-target="#collapsePerfilEstudiante"
+                      aria-expanded="true"
+                      aria-controls="collapsePerfilEstudiante">
+                Datos del Estudiante
+              </button>
+            </h2>
 
-        <div class="d-flex align-items-start justify-content-between">
-          <div>
-            <h5 class="mb-1">{{ estudiante.nombre_completo }}</h5>
-            <div class="text-muted small">
-              ID: {{ estudiante.id }} · Estado: <strong>{{ estudiante.estado }}</strong>
+            <div id="collapsePerfilEstudiante"
+                class="accordion-collapse collapse show"
+                aria-labelledby="headingPerfilEstudiante"
+                data-bs-parent="#perfilEstudianteAccordion">
+              <div class="accordion-body">
+                <div class="d-flex align-items-start justify-content-between">
+                  <div id="perfil-estudiante">
+                    <div class="badge bg-success border">Datos del Estudiante</div>
+                    <div class="mt-3 text-muted small">Nombre Estudiante</div>
+                    <h5 class="mb-1">{{ estudiante.nombre_completo }}</h5>
+                    <div class="text-muted small">
+                      ID: {{ estudiante.id }} · Estado: <strong>{{ estudiante.estado }}</strong>
+                    </div>
+                  </div>
+
+                  <span class="badge rounded-pill bg-warning text-dark border">
+                    {{ estudiante.nivel.nombre }}
+                  </span>
+                </div>
+
+                <div class="mt-3">
+                  <div class="text-muted small">Fecha de nacimiento</div>
+                  <div class="fw-semibold">{{ estudiante.fecha_nacimiento|default:"—" }}</div>
+                </div>
+
+                <div class="mt-3 row g-2">
+                  <div class="col-6">
+                    <div class="text-muted small">Sede</div>
+                    <div class="fw-semibold">{{ estudiante.sede.nombre }}</div>
+                  </div>
+                  <div class="col-6">
+                    <div class="text-muted small">Horario</div>
+                    <div class="fw-semibold">{{ estudiante.horario|default:"—" }}</div>
+                  </div>
+                </div>
+
+                <div class="mt-3">
+                  <div class="text-muted small">Observación</div>
+                  <div>{{ estudiante.observacion|default:"—" }}</div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <span class="badge bg-light text-dark border">
-            {{ estudiante.nivel.nombre }}
-          </span>
-        </div>
+          <!-- Item 2: Contacto del acudiente -->
+          <div class="accordion-item">
+            <h2 class="accordion-header" id="headingContactoAcudiente">
+              <button class="accordion-button collapsed" type="button"
+                      data-bs-toggle="collapse"
+                      data-bs-target="#collapseContactoAcudiente"
+                      aria-expanded="false"
+                      aria-controls="collapseContactoAcudiente">
+                Contacto del Acudiente
+              </button>
+            </h2>
 
-        <hr>
+            <div id="collapseContactoAcudiente"
+                class="accordion-collapse collapse"
+                aria-labelledby="headingContactoAcudiente"
+                data-bs-parent="#perfilEstudianteAccordion">
+              <div class="accordion-body">
+                <div class="badge bg-success border">Contacto del Acudiente</div>
 
-        <div class="mb-2">
-          <div class="text-muted small">Acudiente</div>
-          <div class="fw-semibold">
-            {{ estudiante.acudiente.nombre_completo|default:estudiante.acudiente }}
-          </div>
-        </div>
+                <div class="mt-3 mb-2">
+                  <div class="text-muted small">Nombre Acudiente</div>
+                  <div class="fw-semibold">
+                    {{ estudiante.acudiente.nombre_completo|default:estudiante.acudiente }}
+                  </div>
+                </div>
 
-        <div class="row g-2">
-          <div class="col-6">
-            <div class="text-muted small">Sede</div>
-            <div class="fw-semibold">{{ estudiante.sede }}</div>
-          </div>
-          <div class="col-6">
-            <div class="text-muted small">Horario</div>
-            <div class="fw-semibold">{{ estudiante.horario|default:"—" }}</div>
-          </div>
-        </div>
+                <div class="mt-2">
+                  <div class="row g-2">
+                    <div class="col-12">
+                      <div class="text-muted small">Documento</div>
+                      <div class="fw-semibold">{{ estudiante.acudiente.documento|default:"—" }}</div>
+                    </div>
 
-        <div class="mt-3">
-          <div class="text-muted small">Fecha de nacimiento</div>
-          <div class="fw-semibold">{{ estudiante.fecha_nacimiento|default:"—" }}</div>
-        </div>
+                    <div class="col-12 col-md-6">
+                      <div class="text-muted small">Teléfono</div>
+                      <div class="fw-semibold">{{ estudiante.acudiente.telefono|default:"—" }}</div>
+                    </div>
 
-        <div class="mt-3">
-          <div class="text-muted small">Observación</div>
-          <div>{{ estudiante.observacion|default:"—" }}</div>
-        </div>
-
-        <hr>
-
-        <!-- Contacto acudiente (si existen campos) -->
-        <div class="mt-2">
-          <div class="text-muted small mb-1">Contacto acudiente</div>
-
-          <div class="row g-2">
-            <div class="col-12">
-              <div class="text-muted small">Documento</div>
-              <div class="fw-semibold">{{ estudiante.acudiente.documento|default:"—" }}</div>
-            </div>
-
-            <div class="col-12 col-md-6">
-              <div class="text-muted small">Teléfono</div>
-              <div class="fw-semibold">{{ estudiante.acudiente.telefono|default:"—" }}</div>
-            </div>
-
-            <div class="col-12 col-md-6">
-              <div class="text-muted small">Email</div>
-              <div class="fw-semibold">{{ estudiante.acudiente.email|default:"—" }}</div>
+                    <div class="col-12 col-md-6">
+                      <div class="text-muted small">Email</div>
+                      <div class="fw-semibold">{{ estudiante.acudiente.email|default:"—" }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-
         </div>
-
       </div>
     </div>
 
@@ -117,6 +153,14 @@
               <div class="text-muted small">Valor total</div>
               <div class="fw-bold">
                 {{ contrato.valor_total|default:0|moneda_puntos }}
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="border rounded p-2">
+              <div class="text-muted small">Cuota inicial</div>
+              <div class="fw-bold">
+                {{ kpis.cuota_inicial|default:0|moneda_puntos }}
               </div>
             </div>
           </div>
@@ -210,7 +254,7 @@
               </div>
             </div>
 
-            <div class="text-end">
+            <div class="text-center">
               <div class="text-muted small">Valor total</div>
               <div class="fw-bold">{{ contrato.valor_total|moneda_puntos }}</div>
               <div class="small text-muted">
@@ -239,7 +283,7 @@
                   <th style="width:150px">Pagado</th>
                   <th style="width:150px">Saldo</th>
                   <th style="width:130px">Estado</th>
-                  <th class="text-end" style="width:160px">Acción</th>
+                  <th class="text-center" style="width:160px">Acción</th>
                 </tr>
               </thead>
               <tbody>
@@ -254,7 +298,7 @@
                       {{ cuota.estado }}
                     </td>
 
-                    <td class="text-end">
+                    <td class="text-center">
                       <button
                         type="button"
                         class="btn btn-sm btn-primary btn-aplicar-pago"
@@ -315,8 +359,6 @@
        data-medios-url="{% url 'listar_medios_pago' %}"
        data-hoy="{{ hoy|date:'Y-m-d' }}">
   </div>
-
-  {% include "modal_aplicar_pago.html" %}
 
   <script src="{% static 'js/cxc.js' %}"></script>
 

@@ -60,7 +60,12 @@
 
             <div class="col-md-3">
               <label class="form-label">Fecha pago</label>
-              <input class="form-control" name="fecha_pago" id="mp-fecha" type="date" value="{{ hoy|date:'Y-m-d' }}">
+
+              <!-- Visible: bloqueada para el usuario (no editable) -->
+              <input class="form-control" id="mp-fecha" type="date" value="{{ hoy|date:'Y-m-d' }}" disabled>
+
+              <!-- Real: la que viaja al backend (siempre hoy) -->
+              <input type="hidden" name="fecha_pago" id="mp-fecha-hidden" value="{{ hoy|date:'Y-m-d' }}">
             </div>
             <div class="col-md-3">
               <label class="form-label">Forma de pago</label>

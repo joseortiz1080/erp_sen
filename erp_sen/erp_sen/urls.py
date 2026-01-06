@@ -14,7 +14,9 @@ from gestion_clientes.views import (
     logout_view,           # logout
     buscar_acudiente_por_documento,
     nuevo_ingreso,
-    listar_medios_pago,  
+    listar_medios_pago,
+    reporte_ingresos_manuales,  # reporte conciliación ingresos manuales
+    buscar_estudiante,
 )
 
 urlpatterns = [
@@ -24,6 +26,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
 
     path('estudiantes/', listar_estudiantes, name='listar_estudiantes'),
+    path('estudiantes/buscar/', buscar_estudiante, name='buscar_estudiante'),
     path('estudiantes/<int:id>/', detalle_estudiante, name='detalle_estudiante'),
 
     path('cxc/', listado_cxc, name='listado_cxc'),
@@ -31,8 +34,9 @@ urlpatterns = [
     path('pago/eliminar/', eliminar_pago, name='eliminar_pago'),
     path('nuevo-contrato/', nuevo_contrato, name='nuevo_contrato'),
     path('logout/', logout_view, name='logout'),
+
     path('api/acudientes/buscar/', buscar_acudiente_por_documento, name='buscar_acudiente'),
     path('ingresos/nuevo/', nuevo_ingreso, name='nuevo_ingreso'),
+    path('ingresos/reporte/', reporte_ingresos_manuales, name='reporte_ingresos_manuales'),
     path('api/medios-pago/', listar_medios_pago, name='listar_medios_pago'),
-
 ]
