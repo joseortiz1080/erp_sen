@@ -1,0 +1,219 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Administración de Roles y Permisos{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="mb-0">Administración de Roles y Permisos</h2>
+    <div class="text-muted small">Control de acceso (RBAC): roles → permisos</div>
+  </div>
+
+  <div class="d-flex gap-2">
+    {# Ajusta el nombre de URL si en tu urls.py es diferente #}
+    <a href="{% url 'admin_usuarios_roles' %}" class="btn btn-outline-primary">
+      Administrar Usuarios ↔ Roles
+    </a>
+  </div>
+</div>
+
+<div class="row g-3">
+
+  <!-- =========================
+      Columna izquierda: Selector de rol + Guardado
+      ========================= -->
+  <div class="col-12 col-lg-4">
+
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h6 class="mb-2">Seleccionar rol</h6>
+        <div class="text-muted small mb-3">Elige un rol para ver y editar sus permisos.</div>
+
+        <form method="get" action="{% url 'admin_roles_permisos' %}" class="row g-2">
+          <div class="col-12">
+            <select name="rol_id" class="form-select" required>
+              <option value="">— Seleccione —</option>
+              {% for r in roles %}
+                <option value="{{ r.id }}" {% if rol_seleccionado and rol_seleccionado.id == r.id %}selected{% endif %}>
+                  {{ r.nombre }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-12">
+            <button class="btn btn-primary w-100" type="submit">Cargar</button>
+          </div>
+
+          <div class="col-12">
+            <a class="btn btn-outline-secondary w-100" href="{% url 'admin_roles_permisos' %}">Limpiar</a>
+          </div>
+        </form>
+
+        <hr class="my-3">
+
+      </div>
+    </div>
+
+    <div class="card shadow-sm mt-3">
+      <div class="card-body">
+        <h6 class="mb-2">Buenas prácticas</h6>
+        <ul class="small text-muted mb-0">
+          <li>Permisos deben tener <strong>código único</strong> (ej: <code>ver_dashboard</code>).</li>
+          <li>Asigne permisos por rol; asigne roles por usuario.</li>
+          <li>Evite dar permisos sueltos a usuarios: mantenga gobernanza.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- =========================
+      Columna derecha: Permisos del rol
+      ========================= -->
+  <div class="col-12 col-lg-8">
+
+    <div class="card shadow-sm">
+      <div class="card-body">
+
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <h5 class="mb-0">Permisos del rol</h5>
+          {% if rol_seleccionado %}
+            <span class="badge bg-primary border">{{ rol_seleccionado.nombre }}</span>
+          {% else %}
+            <span class="badge bg-secondary border">Sin rol seleccionado</span>
+          {% endif %}
+        </div>
+
+        {% if messages %}
+          {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} py-2 mb-2">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+
+        {% if rol_seleccionado %}
+
+          <form method="post" action="{% url 'admin_roles_permisos' %}" class="mt-2">
+            {% csrf_token %}
+            <input type="hidden" name="rol_id" value="{{ rol_seleccionado.id }}">
+            <input type="hidden" name="accion" value="guardar_permisos">
+
+            <div class="table-responsive-lg">
+              <table class="table table-hover align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th class="text-center" style="width:56px">✔</th>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th class="text-center" style="width:110px">Activo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for p in permisos %}
+                    {# Requiere: permisos_asignados_ids (set de IDs) en el contexto para marcar checks #}
+                    <tr>
+                      <td>
+                        <div class="form-check">
+                          <input
+                            class="form-check-input"
+                            type="checkbox"
+                            name="permisos"
+                            value="{{ p.id }}"
+                            id="perm_{{ p.id }}"
+                            {% if permisos_asignados_ids and p.id in permisos_asignados_ids %}checked{% endif %}
+                            {% if not rol_seleccionado %}disabled{% endif %}
+                          >
+                        </div>
+                      </td>
+                      <td class="text-break">
+                        <label class="mb-0 fw-semibold" for="perm_{{ p.id }}"><code>{{ p.codigo }}</code></label>
+                        {% if p.descripcion %}
+                          <div class="small text-muted">{{ p.descripcion }}</div>
+                        {% endif %}
+                      </td>
+                      <td>{{ p.nombre }}</td>
+                      <td>
+                        {% if p.activo %}
+                          <span class="badge bg-success border">Activo</span>
+                        {% else %}
+                          <span class="badge bg-secondary border">Inactivo</span>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% empty %}
+                    <tr>
+                      <td colspan="4" class="text-center text-muted py-4">
+                        No hay permisos creados. Ejecute el seed o cree permisos en base de datos.
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-3">
+              <a href="?rol_id={{ rol_seleccionado.id }}" class="btn btn-outline-secondary">Revertir</a>
+              <button type="submit" name="guardar" value="1" class="btn btn-primary" {% if not rol_seleccionado %}disabled{% endif %}>Guardar permisos</button>
+            </div>
+
+          </form>
+
+        {% else %}
+          <div class="alert alert-light border mt-3 mb-0">
+            Para editar permisos, primero seleccione un rol en la columna izquierda.
+          </div>
+        {% endif %}
+
+      </div>
+    </div>
+
+    <!-- Resumen de roles -->
+    <div class="card shadow-sm mt-3">
+      <div class="card-body">
+        <h6 class="mb-3">Resumen de roles</h6>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Rol</th>
+                <th style="width:120px" class="text-end">Permisos</th>
+                <th style="width:140px" class="text-end">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in roles %}
+                <tr>
+                  <td class="fw-semibold">{{ r.nombre }}</td>
+                  <td class="text-end">
+                    {# si el view no anota conteo, se mostrará vacío sin romper #}
+                    {% if r.permisos_count is not None %}
+                      {{ r.permisos_count }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <a class="btn btn-sm btn-outline-primary" href="?rol_id={{ r.id }}">Editar</a>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="3" class="text-center text-muted py-3">No hay roles creados.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="text-muted small">
+          Recomendación: mantenga pocos roles y permisos bien definidos para reducir complejidad operativa.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+{% endblock %}

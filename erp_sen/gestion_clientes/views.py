@@ -18,9 +18,334 @@ from django.views.decorators.http import require_POST, require_GET
 from .forms import AcudienteForm, EstudianteForm, ContratoForm, IngresoForm
 from .models import (
     Estudiante, Contrato, Cuota, Ingreso, Nivel, Horario, Sede, Acudiente,
-    MedioPago, ConceptoIngreso, PagoAplicacion, ConsecutivoComprobante
+    MedioPago, ConceptoIngreso, PagoAplicacion, ConsecutivoComprobante,
+    Permiso, Rol, RolPermiso, UsuarioRol
 )
 from django.views.decorators.csrf import ensure_csrf_cookie
+
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse
+
+from django.template import TemplateDoesNotExist
+from functools import wraps
+
+
+# ============================
+# Roles y permisos (ERP SEN)
+# ============================
+
+def user_has_perm(user, codigo_permiso: str) -> bool:
+    """
+    Permisos por roles (modelos propios).
+    - Superuser: True
+    - Permiso: campo `codigo` (según tu error: NO es codename)
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+
+    codigo_permiso = (codigo_permiso or "").strip()
+    if not codigo_permiso:
+        return False
+
+    # Import local para no tocar demasiado el header
+    from .models import Permiso
+
+    return Permiso.objects.filter(
+        codigo=codigo_permiso,
+        activo=True,
+        roles__usuarios=user,
+        roles__activo=True,
+    ).exists()
+
+
+
+def permiso_requerido(codigo_permiso: str):
+    """Decorador que bloquea con 403 si no tiene permiso.
+
+    Nota:
+    - Debe usarse junto con @login_required en las vistas para que el anónimo
+      sea redirigido a login (y no reciba 403).
+    - Preserva metadata del view (name/doc) para no romper reverse/CBVs/tests.
+    """
+    def _decorator(view_func):
+        @wraps(view_func)
+        def _wrapped(request, *args, **kwargs):
+            if not user_has_perm(request.user, codigo_permiso):
+                # 403 centralizado (handler403)
+                raise PermissionDenied("No está autorizado para ver esta vista.")
+            return view_func(request, *args, **kwargs)
+        return _wrapped
+    return _decorator
+
+
+
+def custom_403(request, exception=None):
+    """Handler 403 central.
+
+    - Renderiza 403.html si existe.
+    - Si no existe, devuelve HTML mínimo (para no romper producción).
+    """
+    msg = None
+    try:
+        msg = str(exception) if exception else None
+    except Exception:
+        msg = None
+
+    try:
+        return render(request, "403.html", {"mensaje": msg}, status=403)
+    except TemplateDoesNotExist:
+        texto = msg or "No está autorizado para ver esta vista."
+        return HttpResponse(
+            f"<h1>403 - No autorizado</h1><p>{texto}</p>",
+            status=403
+        )
+
+
+# ============================
+# Administración: Roles y Permisos
+# ============================
+@login_required
+@permiso_requerido("admin_roles_permisos")
+def admin_roles_permisos(request):
+    """Administración: asignación de permisos a roles.
+
+    Flujo esperado por el template:
+    - GET con ?rol_id=... => carga checks del rol
+    - POST => guarda (reemplazo total) y redirige a la misma vista con el rol seleccionado
+
+    Nota técnica:
+    - Usamos el M2M `Rol.permisos` (Django gestiona la tabla through `RolPermiso`).
+    - Evitamos borrar/crear manualmente en `RolPermiso` para no desalinearnos del M2M.
+    """
+
+    # Roles y permisos activos
+    roles = (
+        Rol.objects.filter(activo=True)
+        .annotate(permisos_count=Count('permisos', distinct=True))
+        .order_by('nombre')
+    )
+    permisos = Permiso.objects.filter(activo=True).order_by('codigo', 'nombre')
+
+    # GET: rol seleccionado (acepta alias para evitar desalineación template/urls)
+    rol_id_get = (
+        request.GET.get('rol_id')
+        or request.GET.get('rol')
+        or request.GET.get('role_id')
+        or ''
+    ).strip()
+
+    rol_seleccionado = None
+    if rol_id_get:
+        rol_seleccionado = get_object_or_404(Rol, id=rol_id_get, activo=True)
+
+    # POST: puede ser “Cargar” (redirige a GET con rol_id) o “Guardar” (reemplazo total)
+    if request.method == 'POST':
+        rol_id = (
+            request.POST.get('rol_id')
+            or request.POST.get('rol')
+            or request.POST.get('role_id')
+            or ''
+        ).strip()
+
+        # Si el template envía un botón tipo “cargar” por POST, lo tratamos como navegación
+        if 'cargar' in request.POST or 'btn_cargar' in request.POST:
+            if rol_id:
+                return redirect(f"{request.path}?rol_id={rol_id}")
+            messages.error(request, 'Seleccione un rol para cargar.')
+            return redirect('admin_roles_permisos')
+
+        # Guardar permisos
+        permisos_ids = (
+            request.POST.getlist('permisos')
+            or request.POST.getlist('permisos[]')
+        )
+
+        if not rol_id:
+            messages.error(request, 'Seleccione un rol para guardar permisos.')
+            return redirect('admin_roles_permisos')
+
+        rol = get_object_or_404(Rol, id=rol_id, activo=True)
+
+        # Normalizar IDs (evita basura en POST)
+        try:
+            permisos_ids_int = {int(x) for x in permisos_ids}
+        except Exception:
+            permisos_ids_int = set()
+
+        permisos_validos_ids = list(
+            Permiso.objects
+            .filter(id__in=permisos_ids_int, activo=True)
+            .values_list('id', flat=True)
+        )
+
+        with transaction.atomic():
+            # Reemplazo total del set de permisos del rol
+            rol.permisos.set(permisos_validos_ids)
+
+        messages.success(request, f"Permisos actualizados para el rol: {rol.nombre}")
+        return redirect(f"{request.path}?rol_id={rol.id}")
+
+    # IDs asignados (para checks del template)
+    permisos_asignados_ids = set()
+    if rol_seleccionado:
+        permisos_asignados_ids = set(
+            rol_seleccionado.permisos.filter(activo=True).values_list('id', flat=True)
+        )
+
+    return render(request, 'seguridad/admin_roles_permisos.html', {
+        'roles': roles,
+        'permisos': permisos,
+        'rol_seleccionado': rol_seleccionado,
+        'permisos_asignados_ids': permisos_asignados_ids,
+        'rol_id_get': rol_id_get,
+    })
+
+
+# --- NUEVA VISTA: asignación de roles a usuarios (después de admin_roles_permisos) ---
+
+@login_required
+@permiso_requerido("admin_usuarios_roles")
+def admin_usuarios_roles(request):
+    """Administración: asignación de ROLES a usuarios (auth.User).
+
+    Vista (opción 1): mostrar `username + email`.
+
+    - GET: lista usuarios del sistema y roles activos; marca roles asignados.
+    - POST:
+        A) Guardado MASIVO (recomendado): recibe checkboxes con nombre `roles_<user_id>`
+           y reemplaza el set completo de roles de cada usuario enviado.
+        B) Guardado POR USUARIO: si viene `user_id`, usa `roles` como lista de IDs.
+
+    Seguridad:
+    - Requiere login.
+    - Requiere permiso `gestionar_roles` (o superuser por regla en `user_has_perm`).
+    """
+    from django.contrib.auth.models import User
+
+    roles = Rol.objects.filter(activo=True).order_by('nombre')
+
+    # -----------------------------
+    # GET: filtros/paginación (para no cargar miles de usuarios en producción)
+    # -----------------------------
+    q_text = (request.GET.get('q') or '').strip()
+    try:
+        per_page = int(request.GET.get('per_page', 50))
+    except ValueError:
+        per_page = 50
+    page = request.GET.get('page', 1)
+
+    usuarios_qs = User.objects.all().order_by('username', 'email')
+
+    if q_text:
+        usuarios_qs = usuarios_qs.filter(
+            Q(username__icontains=q_text) |
+            Q(email__icontains=q_text) |
+            Q(first_name__icontains=q_text) |
+            Q(last_name__icontains=q_text)
+        )
+
+    # -----------------------------
+    # POST: guardar asignaciones
+    # -----------------------------
+    if request.method == 'POST':
+        # Caso B: guardado por usuario (si tu template lo usa)
+        user_id = (request.POST.get('user_id') or '').strip()
+        if user_id:
+            roles_ids = request.POST.getlist('roles')  # lista de IDs seleccionados
+
+            try:
+                usuario = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                messages.error(request, 'El usuario indicado no existe.')
+                return redirect('admin_usuarios_roles')
+
+            roles_validos = list(
+                Rol.objects.filter(id__in=roles_ids, activo=True).values_list('id', flat=True)
+            )
+
+            with transaction.atomic():
+                UsuarioRol.objects.filter(usuario=usuario).delete()
+                if roles_validos:
+                    UsuarioRol.objects.bulk_create(
+                        [UsuarioRol(usuario=usuario, rol_id=r_id) for r_id in roles_validos]
+                    )
+
+            messages.success(request, f"Roles actualizados para el usuario: {usuario.username}")
+            return redirect('admin_usuarios_roles')
+
+        # Caso A: guardado masivo (checkboxes roles_<user_id>)
+        # Ej: roles_12 = ["1", "3"]
+        keys = [k for k in request.POST.keys() if k.startswith('roles_')]
+        if not keys:
+            messages.warning(request, 'No se recibieron cambios de roles para guardar.')
+            return redirect('admin_usuarios_roles')
+
+        user_ids = []
+        for k in keys:
+            try:
+                user_ids.append(int(k.split('_', 1)[1]))
+            except Exception:
+                continue
+
+        if not user_ids:
+            messages.warning(request, 'No se identificaron usuarios válidos para actualizar.')
+            return redirect('admin_usuarios_roles')
+
+        # Solo usuarios existentes
+        usuarios_map = {u.id: u for u in User.objects.filter(id__in=user_ids)}
+
+        # IDs de roles válidos (activos)
+        roles_validos_set = set(roles.values_list('id', flat=True))
+
+        with transaction.atomic():
+            # Borrado en bloque de asignaciones actuales de esos usuarios
+            UsuarioRol.objects.filter(usuario_id__in=usuarios_map.keys()).delete()
+
+            bulk = []
+            for uid in usuarios_map.keys():
+                raw_ids = request.POST.getlist(f'roles_{uid}')
+                for rid_str in raw_ids:
+                    try:
+                        rid = int(rid_str)
+                    except Exception:
+                        continue
+                    if rid in roles_validos_set:
+                        bulk.append(UsuarioRol(usuario_id=uid, rol_id=rid))
+
+            if bulk:
+                UsuarioRol.objects.bulk_create(bulk)
+
+        messages.success(request, 'Roles actualizados correctamente.')
+        return redirect('admin_usuarios_roles')
+
+    # -----------------------------
+    # GET: mapa usuario_id -> set(rol_id)
+    # (solo roles activos)
+    # -----------------------------
+    asignados = UsuarioRol.objects.filter(
+        rol__activo=True,
+        usuario__is_active=True,
+    ).values_list('usuario_id', 'rol_id')
+
+    mapa = {}
+    for u_id, r_id in asignados:
+        mapa.setdefault(u_id, set()).add(r_id)
+
+    paginator = Paginator(usuarios_qs, per_page)
+    page_obj = paginator.get_page(page)
+
+    return render(request, 'seguridad/admin_usuarios_roles.html', {
+        'roles': roles,
+        'usuarios': page_obj.object_list,
+        'page_obj': page_obj,
+        'paginator': paginator,
+        'q': q_text,
+        'per_page': per_page,
+        'mapa': mapa,
+    })
+
 
 @require_GET
 @login_required
@@ -63,6 +388,7 @@ def logout_view(request):
 
 
 @login_required
+@permiso_requerido("ver_inicio")
 def vista_inicial(request):
     return render(request, 'inicio.html')
 
@@ -110,41 +436,32 @@ def generar_rc(request, sede):
         rc = f"{prefijo}-{sede.id}-{year}-{str(consecutivo_obj.consecutivo).zfill(8)}"
         return rc
 
-
 @login_required
+@permiso_requerido("ver_dashboard")
 def dashboard_view(request):
-    """Dashboard operacional (KPIs + series para gráficas).
-
-    Nota: Se usan imports locales para no tocar el header del archivo y minimizar riesgo en producción.
-    Respeta seguridad por sede vía `user_sede_ids`.
-    """
     import json
+    import calendar
     from datetime import date
     from django.db.models import Sum, F, Value, Q, DecimalField
     from django.db.models.functions import Coalesce, TruncMonth
+    from django.utils.dateparse import parse_date
 
     hoy = now().date()
     sede_ids = user_sede_ids(request.user)
 
-    # -----------------------------
-    # Helper nativo: primer día del mes (hoy - n meses)
-    # Evita dependencia de `python-dateutil` (relativedelta)
-    # -----------------------------
-    def _first_day_months_ago(d: date, months_back: int) -> date:
-        y = d.year
-        m = d.month - months_back
-        while m <= 0:
-            m += 12
-            y -= 1
-        return d.replace(year=y, month=m, day=1)
+    # =====================================================
+    # Helpers de fechas
+    # =====================================================
+    def _month_start(y: int, m: int) -> date:
+        return date(y, m, 1)
 
-    inicio_mes = hoy.replace(day=1)
-    hace_6_meses = _first_day_months_ago(inicio_mes, 5)
-    hace_12_meses = _first_day_months_ago(inicio_mes, 11)  # mes actual + 5 anteriores
+    def _month_end(y: int, m: int) -> date:
+        last_day = calendar.monthrange(y, m)[1]
+        return date(y, m, last_day)
 
-    # -----------------------------
+    # =====================================================
     # QuerySets base (respetando sede)
-    # -----------------------------
+    # =====================================================
     estudiantes_qs = Estudiante.objects.all()
     contratos_qs = Contrato.objects.all()
     cuotas_qs = Cuota.objects.select_related('contrato__estudiante__sede')
@@ -156,25 +473,125 @@ def dashboard_view(request):
         cuotas_qs = cuotas_qs.filter(contrato__estudiante__sede_id__in=sede_ids)
         ingresos_qs = ingresos_qs.filter(sede_id__in=sede_ids)
 
-    # -----------------------------
-    # KPIs de operación
-    # -----------------------------
+    # =====================================================
+    # (NUEVO) Años disponibles (por data real en ingresos)
+    # =====================================================
+    years_dates = ingresos_qs.dates('fecha_pago', 'year', order='ASC')
+    years = [d.year for d in years_dates] or [hoy.year]  # fallback limpio
+
+    # =====================================================
+    # (NUEVO) Método de filtro (selector exclusivo)
+    # metodo: total | anio_meses | rango
+    # =====================================================
+    metodo = (request.GET.get("metodo") or "total").strip().lower()
+    if metodo not in ("total", "anio_meses", "rango"):
+        metodo = "total"
+
+    # Inputs para año/meses
+    anio_str = (request.GET.get("anio") or "").strip()
+    mes_inicio_str = (request.GET.get("mes_inicio") or "").strip()
+    mes_fin_str = (request.GET.get("mes_fin") or "").strip()
+
+    # Inputs para rango libre
+    fecha_desde_str = (request.GET.get("fecha_desde") or "").strip()
+    fecha_hasta_str = (request.GET.get("fecha_hasta") or "").strip()
+
+    fecha_desde = None
+    fecha_hasta = None
+    rango_label = ""
+
+    # =====================================================
+    # Cálculo determinista del rango según método
+    # =====================================================
+    if metodo == "total":
+        # Total historia: sin inicio, fin=hoy (cap)
+        fecha_desde = None
+        fecha_hasta = hoy
+        rango_label = "Histórico total"
+
+    elif metodo == "anio_meses":
+        # Año obligatorio (si viene vacío, tomamos el último año con data)
+        try:
+            anio = int(anio_str) if anio_str else (years[-1] if years else hoy.year)
+        except ValueError:
+            anio = (years[-1] if years else hoy.year)
+
+        # Meses opcionales: si no vienen => año completo
+        try:
+            mes_inicio = int(mes_inicio_str) if mes_inicio_str else 1
+        except ValueError:
+            mes_inicio = 1
+
+        try:
+            mes_fin = int(mes_fin_str) if mes_fin_str else 12
+        except ValueError:
+            mes_fin = 12
+
+        # Guardrails meses 1..12
+        mes_inicio = max(1, min(12, mes_inicio))
+        mes_fin = max(1, min(12, mes_fin))
+
+        # Normalizar: si vienen invertidos
+        if mes_inicio > mes_fin:
+            mes_inicio, mes_fin = mes_fin, mes_inicio
+
+        fecha_desde = _month_start(anio, mes_inicio)
+        fecha_hasta = _month_end(anio, mes_fin)
+
+        # Cap hasta hoy si están pidiendo un periodo futuro
+        if fecha_hasta > hoy:
+            fecha_hasta = hoy
+
+        # Label corporativo
+        if mes_inicio == 1 and mes_fin == 12:
+            rango_label = f"Año {anio}"
+        elif mes_inicio == mes_fin:
+            rango_label = f"{anio} - {calendar.month_name[mes_inicio]}"
+        else:
+            rango_label = f"{anio} - {calendar.month_name[mes_inicio]} a {calendar.month_name[mes_fin]}"
+
+    else:
+        # metodo == "rango"
+        fd = parse_date(fecha_desde_str) if fecha_desde_str else None
+        fh = parse_date(fecha_hasta_str) if fecha_hasta_str else None
+
+        # Reglas: ambos obligatorios; si falta uno, degradamos a total para evitar ambigüedad
+        if not fd or not fh:
+            metodo = "total"
+            fecha_desde = None
+            fecha_hasta = hoy
+            rango_label = "Histórico total"
+        else:
+            # Normalizar orden
+            if fd > fh:
+                fd, fh = fh, fd
+
+            # Cap fin a hoy
+            if fh > hoy:
+                fh = hoy
+
+            fecha_desde = fd
+            fecha_hasta = fh
+            rango_label = f"{fecha_desde.strftime('%Y-%m-%d')} a {fecha_hasta.strftime('%Y-%m-%d')}"
+
+    # =====================================================
+    # KPIs operativos (no temporales por falta de campo base)
+    # =====================================================
     total_estudiantes = estudiantes_qs.count()
     estudiantes_activos = estudiantes_qs.filter(estado='Activo').count()
-
     contratos_activos = contratos_qs.filter(estado='Activo').count()
 
-    # Mora real (vía PagoAplicacion e ingresos ACTIVO)
+    # =====================================================
+    # KPIs financieros/temporales (SÍ responden al rango)
+    # - Cuotas vencidas en el rango: por fecha_vencimiento
+    # - Ingresos del periodo: por fecha_pago
+    # =====================================================
     cuotas_con_saldo = (
         cuotas_qs
-        # Excluir cuota 0 (cuota inicial/administrativa) para cartera/mora
         .exclude(numero=0)
         .annotate(
             pagado=Coalesce(
-                Sum(
-                    'aplicaciones__valor_aplicado',
-                    filter=Q(aplicaciones__ingreso__estado='ACTIVO')
-                ),
+                Sum('aplicaciones__valor_aplicado', filter=Q(aplicaciones__ingreso__estado='ACTIVO')),
                 Value(0),
                 output_field=DecimalField(max_digits=12, decimal_places=2)
             ),
@@ -182,7 +599,14 @@ def dashboard_view(request):
         .annotate(saldo=F('valor') - F('pagado'))
     )
 
-    cuotas_vencidas_qs = cuotas_con_saldo.filter(fecha_vencimiento__lt=hoy, saldo__gt=0)
+    # Vencidas "en el periodo" (si fecha_desde es None, queda hasta fecha_hasta)
+    cuotas_vencidas_qs = cuotas_con_saldo.filter(
+        fecha_vencimiento__lte=fecha_hasta,
+        saldo__gt=0
+    )
+    if fecha_desde:
+        cuotas_vencidas_qs = cuotas_vencidas_qs.filter(fecha_vencimiento__gte=fecha_desde)
+
     cuotas_vencidas = cuotas_vencidas_qs.count()
     saldo_vencido = (
         cuotas_vencidas_qs.aggregate(
@@ -191,42 +615,38 @@ def dashboard_view(request):
         or Decimal('0.00')
     )
 
-    # Ingresos del mes (ACTIVO)
-# Ingresos últimos 12 meses (ACTIVO) - SOLO para el KPI del card
-    ingresos_mes = (
-        ingresos_qs
-        .filter(fecha_pago__gte=hace_12_meses, fecha_pago__lte=hoy)
-        .aggregate(
-            total=Coalesce(
-                Sum('valor_pagado'),
-                Value(0),
-                output_field=DecimalField(max_digits=12, decimal_places=2)
-            )
+    # Ingresos del periodo (si fecha_desde None => histórico hasta fecha_hasta)
+    ingresos_periodo_qs = ingresos_qs.filter(fecha_pago__lte=fecha_hasta)
+    if fecha_desde:
+        ingresos_periodo_qs = ingresos_periodo_qs.filter(fecha_pago__gte=fecha_desde)
+
+    ingresos_periodo = (
+        ingresos_periodo_qs.aggregate(
+            total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
         )['total']
         or Decimal('0.00')
     )
 
-    # Ingresos últimos 6 meses (serie)
-    ingresos_6m_rows = (
-        ingresos_qs
-        .filter(fecha_pago__gte=hace_6_meses, fecha_pago__lte=hoy)
+    # =====================================================
+    # Series para gráficas (mismo rango)
+    # =====================================================
+    ingresos_rows = (
+        ingresos_periodo_qs
         .annotate(mes=TruncMonth('fecha_pago'))
         .values('mes')
         .annotate(total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
         .order_by('mes')
     )
 
-    labels_6m = []
-    values_6m = []
-    for r in ingresos_6m_rows:
+    labels = []
+    values = []
+    for r in ingresos_rows:
         mes = r['mes']
-        labels_6m.append(mes.strftime('%Y-%m') if mes else '')
-        values_6m.append(float(r['total'] or 0))
+        labels.append(mes.strftime('%Y-%m') if mes else '')
+        values.append(float(r['total'] or 0))
 
-    # Top sedes por ingresos (últimos 30 días)
     top_sedes_rows = (
-        ingresos_qs
-        .filter(fecha_pago__gte=hoy.replace(day=1), fecha_pago__lte=hoy)
+        ingresos_periodo_qs
         .values('sede__nombre')
         .annotate(total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
         .order_by('-total')[:5]
@@ -235,6 +655,9 @@ def dashboard_view(request):
     top_sedes_labels = [r['sede__nombre'] or '' for r in top_sedes_rows]
     top_sedes_values = [float(r['total'] or 0) for r in top_sedes_rows]
 
+    # =====================================================
+    # Context
+    # =====================================================
     context = {
         'kpis': {
             'total_estudiantes': total_estudiantes,
@@ -242,12 +665,22 @@ def dashboard_view(request):
             'contratos_activos': contratos_activos,
             'cuotas_vencidas': cuotas_vencidas,
             'saldo_vencido': saldo_vencido,
-            'ingresos_mes': ingresos_mes,
+            # mantenemos la key para no romper el template actual
+            'ingresos_mes': ingresos_periodo,
         },
-        # Series listas para Chart.js (o similar)
-        'chart_ingresos_6m': json.dumps({'labels': labels_6m, 'values': values_6m}),
+        'chart_ingresos_6m': json.dumps({'labels': labels, 'values': values}),
         'chart_top_sedes': json.dumps({'labels': top_sedes_labels, 'values': top_sedes_values}),
         'hoy': hoy,
+
+        # Filtro UI
+        'metodo': metodo,
+        'years': years,
+        'anio': anio_str,
+        'mes_inicio': mes_inicio_str,
+        'mes_fin': mes_fin_str,
+        'fecha_desde': fecha_desde.strftime('%Y-%m-%d') if fecha_desde else '',
+        'fecha_hasta': fecha_hasta.strftime('%Y-%m-%d') if fecha_hasta else '',
+        'rango_label': rango_label,
     }
 
     return render(request, 'dashboard.html', context)
@@ -255,6 +688,7 @@ def dashboard_view(request):
 
 
 @login_required
+@permiso_requerido("listar_estudiantes")
 def listar_estudiantes(request):
     hoy = now().date()
     sede_ids = user_sede_ids(request.user)
@@ -496,6 +930,7 @@ def listar_estudiantes(request):
 
 
 @login_required
+@permiso_requerido("ver_detalle_estudiante")
 def detalle_estudiante(request, id):
     hoy = now().date()
 
@@ -614,6 +1049,7 @@ def detalle_estudiante(request, id):
     })
     
 @login_required
+@permiso_requerido("ver_cartera")
 def listado_cxc(request):
     """
     Listado de CUOTAS (una fila por cuota) con filtros y paginación.
@@ -812,8 +1248,8 @@ def listado_cxc(request):
     }
     return render(request, 'listado_cxc.html', context)
 
-
 @login_required
+@permiso_requerido("registrar_pago")
 def aplicar_pago(request):
     """
     GET  => Retorna historial de pagos de una cuota en JSON (para el modal) + previas con saldo.
@@ -1230,6 +1666,7 @@ def aplicar_pago(request):
         }, status=500)
 
 @login_required
+@permiso_requerido("anular_pago")
 @require_POST
 def eliminar_pago(request):
     """
@@ -1312,8 +1749,8 @@ def eliminar_pago(request):
 
     return JsonResponse({'ok': True})
 
-
 @login_required
+@permiso_requerido("crear_contrato")
 def nuevo_contrato(request):
     # =========================
     # IMPORTS LOCALES (Opción A aplicada)
@@ -1653,8 +2090,8 @@ def buscar_acudiente_por_documento(request):
 
     return JsonResponse(data)
 
-
 @login_required
+@permiso_requerido("registrar_ingreso")
 def nuevo_ingreso(request):
     ES_CLEVEL = request.user.is_superuser or request.user.groups.filter(
         name__in=['Admin', 'CEO', 'CFO']
@@ -1712,13 +2149,14 @@ def nuevo_ingreso(request):
 
 
 @login_required
+@permiso_requerido("ver_reporte_ingresos")
 def reporte_ingresos_manuales(request):
     """Reporte para conciliación de ingresos MANUALES.
 
     Alcance:
     - Solo ingresos creados desde el formulario (tipo_registro='otro_ingreso').
     - Muestra todos los campos relevantes para auditoría/conciliación (RC, factura, referencia, observación,
-      medio de pago, sede, usuario, concepto, estado y datos de anulación).
+    - medio de pago, sede, usuario, concepto, estado y datos de anulación).
     - Respeta seguridad por sede con `user_sede_ids`.
 
     Filtros (GET):
@@ -1835,7 +2273,9 @@ def reporte_ingresos_manuales(request):
 
     return render(request, 'reporte_ingresos.html', context)
 
+@require_GET
 @login_required
+@permiso_requerido("buscar_estudiante")
 def buscar_estudiante(request):
     """
     Buscador puntual para Secretaría:

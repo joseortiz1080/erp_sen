@@ -87,6 +87,38 @@
     }
   }
 
+  function manejarErrorHTTP(resp, data, accion = 'la operación') {
+    const status = resp?.status || data?.status || 0;
+
+    // 1) Permisos: siempre priorizar el mensaje del backend
+    if (status === 403) {
+      alert(data?.error || `No estás autorizado para ${accion}.`);
+      return true;
+    }
+
+    // 2) Respuesta no-JSON / parse error
+    if (data && (data.__non_json__ || data.__json_parse_error__)) {
+      alert(`Respuesta inválida del servidor al ${accion} (HTTP ${status}).`);
+      return true;
+    }
+
+    // 3) Error funcional controlado por backend
+    if (data && data.error) {
+      alert(data.error);
+      return true;
+    }
+
+    // 4) Fallback
+    alert(`Error inesperado al ${accion} (HTTP ${status || '—'}).`);
+    return true;
+  }
+
+  function renderHistorialError(msg) {
+    tbodyHist.innerHTML = `<tr><td colspan="8" class="text-danger">${msg}</td></tr>`;
+    previasWrap?.classList.add('d-none');
+    previasBody && (previasBody.innerHTML = '');
+  }
+
   let mediosCargados = false;
 
 async function cargarMedios() {
@@ -135,10 +167,19 @@ async function cargarMedios() {
 
       const data = await safeJson(resp, 'historial');
 
-      if (data.__non_json__) {
-        tbodyHist.innerHTML = `<tr><td colspan="8" class="text-danger">Respuesta inválida (HTTP ${data.status}). Ver consola.</td></tr>`;
-        previasWrap?.classList.add('d-none');
-        previasBody && (previasBody.innerHTML = '');
+      if (data.__non_json__ || data.__json_parse_error__) {
+        if (resp.status === 403) {
+          manejarErrorHTTP(resp, data, 'ver el historial');
+          renderHistorialError(data?.error || 'No estás autorizado para ver el historial de pagos.');
+        } else {
+          renderHistorialError(`Respuesta inválida del servidor (HTTP ${data.status}). Ver consola.`);
+        }
+        return;
+      }
+
+      if (resp.status === 403) {
+        manejarErrorHTTP(resp, data, 'ver el historial');
+        renderHistorialError(data?.error || 'No estás autorizado para ver el historial de pagos.');
         return;
       }
 
@@ -206,9 +247,7 @@ async function cargarMedios() {
 
     } catch (err) {
       console.error(err);
-      tbodyHist.innerHTML = `<tr><td colspan="8" class="text-danger">${err.message}</td></tr>`;
-      previasWrap?.classList.add('d-none');
-      previasBody && (previasBody.innerHTML = '');
+      renderHistorialError(err.message);
     }
   }
 
@@ -304,15 +343,15 @@ async function cargarMedios() {
 
     const data = await safeJson(resp, 'eliminar_pago');
 
-    if (data.__non_json__) {
-      alert(`Respuesta inválida al eliminar (HTTP ${data.status}). Ver consola.`);
+    if (data.__non_json__ || data.__json_parse_error__) {
+      manejarErrorHTTP(resp, data, 'eliminar el pago');
       return;
     }
 
     if (resp.ok && data.ok) {
       location.reload();
     } else {
-      alert(data.error || 'No se pudo eliminar el pago.');
+      manejarErrorHTTP(resp, data, 'eliminar el pago');
     }
   });
 
@@ -347,14 +386,13 @@ async function cargarMedios() {
 
       const data = await safeJson(resp, 'aplicar_pago');
 
-      if (data.__non_json__) {
-        if (data.status === 403) {
-          alert('403 Forbidden: CSRF o permisos. Ver consola para el preview.');
-        } else if (data.status >= 500) {
-          alert('Error 500 en servidor al aplicar el pago. Ver consola y logs Django.');
-        } else {
-          alert(`Respuesta inválida (no JSON). HTTP ${data.status}. Ver consola.`);
-        }
+      if (data.__non_json__ || data.__json_parse_error__) {
+        manejarErrorHTTP(resp, data, 'aplicar el pago');
+        return;
+      }
+
+      if (resp.status === 403) {
+        manejarErrorHTTP(resp, data, 'aplicar el pago');
         return;
       }
 
@@ -363,7 +401,7 @@ async function cargarMedios() {
         return;
       }
 
-      alert(data.error || `No se pudo aplicar el pago (HTTP ${resp.status}).`);
+      manejarErrorHTTP(resp, data, 'aplicar el pago');
 
     } catch (err) {
       console.error(err);

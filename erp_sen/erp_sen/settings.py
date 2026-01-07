@@ -181,5 +181,5 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
     SECURE_HSTS_PRELOAD = env_bool('DJANGO_SECURE_HSTS_PRELOAD', True)
     # Uncomment if behind a proxy/ALB that sets X-Forwarded-Proto
-    if env_bool('DJANGO_USE_PROXY_SSL_HEADER', False):
+    if env_bool('DJANGO_USE_PROXY_SSL_HEADER', True):
         SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

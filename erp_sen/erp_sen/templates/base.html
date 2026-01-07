@@ -1,4 +1,5 @@
 {% load static %}
+{% load authz %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -8,6 +9,18 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <style>
+      /* Dropdown hover (solo desktop). En móvil se mantiene por click (Bootstrap). */
+      @media (min-width: 992px) {
+        .navbar .dropdown:hover > .dropdown-menu {
+          display: block;
+          margin-top: 0;
+        }
+        .navbar .dropdown > .dropdown-toggle {
+          pointer-events: auto;
+        }
+      }
+    </style>
     <link rel="icon" type="image/svg+xml" href="{% static 'images/favicon.svg' %}">
     <link rel="icon" href="{% static 'images/favicon.ico' %}" sizes="any">
     <link rel="apple-touch-icon" href="{% static 'images/apple-touch-icon.png' %}">
@@ -31,27 +44,150 @@
 
       <div class="collapse navbar-collapse" id="mainNavbar">
         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'dashboard' %}"><i class="bi bi-house"></i> Dashboard</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'listar_estudiantes' %}"><i class="bi bi-people"></i> Estudiantes</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'buscar_estudiante' %}"><i class="bi bi-search"></i> Buscar Estudiante</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'nuevo_contrato' %}"><i class="bi bi-file-earmark-plus"></i> Nuevo Contrato</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'nuevo_ingreso' %}"><i class="bi bi-cash-coin"></i> Reportar un Ingreso</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{% url 'reporte_ingresos_manuales' %}">
-              <i class="bi bi-journal-text"></i> Reporte Ingresos
+
+  {% has_perm "ver_dashboard" as can_dashboard %}
+  {% if can_dashboard %}
+    <li class="nav-item">
+      <a class="nav-link" href="{% url 'dashboard' %}">
+        <i class="bi bi-house"></i> Dashboard
+      </a>
+    </li>
+  {% endif %}
+
+
+  {% has_perm "admin_roles_permisos" as can_admin_roles_permisos %}
+  {% has_perm "admin_usuarios_roles" as can_admin_usuarios_roles %}
+
+  {% if can_admin_roles_permisos or can_admin_usuarios_roles %}
+    <li class="nav-item dropdown">
+      <a class="nav-link dropdown-toggle" href="#" role="button"
+         data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-gear"></i> Administrar
+      </a>
+
+      <ul class="dropdown-menu">
+
+        {# Crear Usuario (aún NO existe) #}
+        <li>
+          <a class="dropdown-item disabled" href="#" tabindex="-1" aria-disabled="true">
+            <i class="bi bi-person-plus"></i> Crear Usuario
+            <span class="text-muted small ms-1">(próximamente)</span>
+          </a>
+        </li>
+
+        <li><hr class="dropdown-divider"></li>
+
+        {% if can_admin_roles_permisos %}
+          <li>
+            <a class="dropdown-item" href="{% url 'admin_roles_permisos' %}">
+              <i class="bi bi-shield-lock"></i> Roles y permisos
             </a>
           </li>
-        </ul>
+        {% endif %}
+
+        {% if can_admin_usuarios_roles %}
+          <li>
+            <a class="dropdown-item" href="{% url 'admin_usuarios_roles' %}">
+              <i class="bi bi-people"></i> Administrar Usuarios y roles
+            </a>
+          </li>
+        {% endif %}
+      </ul>
+    </li>
+  {% endif %}
+
+
+  {% has_perm "crear_contrato" as can_nuevo_contrato %}
+  {% has_perm "listar_estudiantes" as can_listar_estudiantes %}
+  {% has_perm "buscar_estudiante" as can_buscar_estudiante %}
+  {% has_perm "registrar_ingreso" as can_registrar_ingreso %}
+
+  {% if can_nuevo_contrato or can_listar_estudiantes or can_buscar_estudiante or can_registrar_ingreso %}
+    <li class="nav-item dropdown">
+      <a class="nav-link dropdown-toggle" href="#" role="button"
+         data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-cash-coin"></i> Finanzas
+      </a>
+
+      <ul class="dropdown-menu">
+
+        {% if can_nuevo_contrato %}
+          <li>
+            <a class="dropdown-item" href="{% url 'nuevo_contrato' %}">
+              <i class="bi bi-file-earmark-plus"></i> Nuevo Contrato
+            </a>
+          </li>
+        {% endif %}
+
+        {% if can_listar_estudiantes %}
+          <li>
+            <a class="dropdown-item" href="{% url 'listar_estudiantes' %}">
+              <i class="bi bi-people"></i> Estudiantes
+            </a>
+          </li>
+        {% endif %}
+
+        {% if can_buscar_estudiante %}
+          <li>
+            <a class="dropdown-item" href="{% url 'buscar_estudiante' %}">
+              <i class="bi bi-search"></i> Buscar Estudiante
+            </a>
+          </li>
+        {% endif %}
+
+        {% if can_registrar_ingreso %}
+          <li>
+            <a class="dropdown-item" href="{% url 'nuevo_ingreso' %}">
+              <i class="bi bi-plus-circle"></i> Reportar un ingreso
+            </a>
+          </li>
+        {% endif %}
+
+        {# Reportar Gasto (aún NO existe) #}
+        <li>
+          <a class="dropdown-item disabled" href="#" tabindex="-1" aria-disabled="true">
+            <i class="bi bi-dash-circle"></i> Reportar Gasto
+            <span class="text-muted small ms-1">(próximamente)</span>
+          </a>
+        </li>
+
+      </ul>
+    </li>
+  {% endif %}
+
+
+      {% has_perm "ver_reporte_ingresos" as can_reporte_ingresos %}
+
+      {% if can_reporte_ingresos %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button"
+            data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-journal-text"></i> Reportes
+          </a>
+
+          <ul class="dropdown-menu">
+
+            {% if can_reporte_ingresos %}
+              <li>
+                <a class="dropdown-item" href="{% url 'reporte_ingresos_manuales' %}">
+                  <i class="bi bi-journal-check"></i> Reporte de Ingresos
+                </a>
+              </li>
+            {% endif %}
+
+            {# Cierre de caja (aún NO existe) #}
+            <li>
+              <a class="dropdown-item disabled" href="#" tabindex="-1" aria-disabled="true">
+                <i class="bi bi-receipt"></i> Cierre de caja
+                <span class="text-muted small ms-1">(próximamente)</span>
+              </a>
+            </li>
+
+          </ul>
+        </li>
+      {% endif %}
+
+    </ul>
 
         <div class="d-flex flex-column flex-lg-row align-items-lg-center gap-2">
           <span class="navbar-text">Bienvenido {{ request.user.get_username }}</span>

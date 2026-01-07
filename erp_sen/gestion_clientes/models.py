@@ -472,3 +472,109 @@ class Perfil(models.Model):
     def __str__(self):
         return self.user.username
     
+# models.py
+from django.conf import settings
+from django.db import models
+
+
+class Permiso(models.Model):
+    """
+    Permiso atómico: una acción concreta del sistema.
+    Ej: ver_dashboard, buscar_estudiante, aplicar_pago, eliminar_pago
+    """
+    codigo = models.CharField(max_length=80, unique=True)  # ej: "ver_dashboard"
+    nombre = models.CharField(max_length=120)              # ej: "Ver dashboard"
+    descripcion = models.TextField(blank=True)
+    activo = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "seguridad_permiso"
+        ordering = ["codigo"]
+
+    def __str__(self):
+        return f"{self.codigo}"
+
+
+class Rol(models.Model):
+    """
+    Rol: agrupador de permisos.
+    Ej: CEO, CFO, Secretaria
+    """
+    codigo = models.CharField(max_length=60, unique=True)  # ej: "secretaria"
+    nombre = models.CharField(max_length=120)              # ej: "Secretaria"
+    descripcion = models.TextField(blank=True)
+    activo = models.BooleanField(default=True)
+
+    permisos = models.ManyToManyField(
+        Permiso,
+        through="RolPermiso",
+        related_name="roles",
+        blank=True,
+    )
+
+    usuarios = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        through="UsuarioRol",
+        through_fields=("rol", "usuario"),
+        related_name="roles",
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "seguridad_rol"
+        ordering = ["nombre"]
+
+    def __str__(self):
+        return f"{self.nombre}"
+
+
+class RolPermiso(models.Model):
+    """
+    Tabla intermedia Rol-Permiso (auditable).
+    """
+    rol = models.ForeignKey(Rol, on_delete=models.CASCADE)
+    permiso = models.ForeignKey(Permiso, on_delete=models.CASCADE)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "seguridad_rol_permiso"
+        constraints = [
+            models.UniqueConstraint(fields=["rol", "permiso"], name="uq_rol_permiso")
+        ]
+
+    def __str__(self):
+        return f"{self.rol.codigo} -> {self.permiso.codigo}"
+
+
+class UsuarioRol(models.Model):
+    """
+    Tabla intermedia Usuario-Rol (auditable).
+    """
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    rol = models.ForeignKey(Rol, on_delete=models.CASCADE)
+
+    asignado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="roles_asignados",
+    )
+    asignado_en = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "seguridad_usuario_rol"
+        constraints = [
+            models.UniqueConstraint(fields=["usuario", "rol"], name="uq_usuario_rol")
+        ]
+
+    def __str__(self):
+        return f"{self.usuario_id} -> {self.rol.codigo}"

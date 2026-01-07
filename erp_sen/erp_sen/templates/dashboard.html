@@ -1,4 +1,3 @@
-
 {% extends 'base.html' %}
 {% load static %}
 {% load filtros_monetarios %}
@@ -12,8 +11,122 @@
     <div>
       <h2 class="mb-0">Dashboard</h2>
       <div class="text-muted">Panel ejecutivo — indicadores operativos</div>
+      <div class="text-muted small mt-1">
+        <span class="fw-semibold">Rango:</span> {{ rango_label|default:"Histórico total" }}
+      </div>
     </div>
   </div>
+
+  <!-- Filtros (método exclusivo) -->
+  <form method="get" class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-end gap-3">
+
+        <div class="me-auto">
+          <div class="fw-semibold">Método de análisis</div>
+          <div class="text-muted small">Seleccione un método para evitar cruces de filtros.</div>
+
+          <div class="d-flex flex-wrap gap-3 mt-2">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="metodo" id="m_total" value="total"
+                     {% if metodo == "total" or not metodo %}checked{% endif %}>
+              <label class="form-check-label" for="m_total">Total (histórico)</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="metodo" id="m_anio" value="anio_meses"
+                     {% if metodo == "anio_meses" %}checked{% endif %}>
+              <label class="form-check-label" for="m_anio">Año / Meses</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="metodo" id="m_rango" value="rango"
+                     {% if metodo == "rango" %}checked{% endif %}>
+              <label class="form-check-label" for="m_rango">Rango libre</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Año/Meses -->
+        <div id="grupo_anio_meses" class="border rounded p-2">
+          <div class="small text-muted mb-2">Corte por año y rango de meses</div>
+          <div class="d-flex flex-wrap gap-2">
+            <div>
+              <label class="form-label small mb-1">Año</label>
+              <select name="anio" class="form-select form-select-sm">
+                {% for y in years %}
+                  <option value="{{ y }}" {% if anio|default:"" == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div>
+              <label class="form-label small mb-1">Mes inicio</label>
+              <select name="mes_inicio" class="form-select form-select-sm">
+
+                <option value="1"  {% if mes_inicio == "1" %}selected{% endif %}>Enero</option>
+                <option value="2"  {% if mes_inicio == "2" %}selected{% endif %}>Febrero</option>
+                <option value="3"  {% if mes_inicio == "3" %}selected{% endif %}>Marzo</option>
+                <option value="4"  {% if mes_inicio == "4" %}selected{% endif %}>Abril</option>
+                <option value="5"  {% if mes_inicio == "5" %}selected{% endif %}>Mayo</option>
+                <option value="6"  {% if mes_inicio == "6" %}selected{% endif %}>Junio</option>
+                <option value="7"  {% if mes_inicio == "7" %}selected{% endif %}>Julio</option>
+                <option value="8"  {% if mes_inicio == "8" %}selected{% endif %}>Agosto</option>
+                <option value="9"  {% if mes_inicio == "9" %}selected{% endif %}>Septiembre</option>
+                <option value="10" {% if mes_inicio == "10" %}selected{% endif %}>Octubre</option>
+                <option value="11" {% if mes_inicio == "11" %}selected{% endif %}>Noviembre</option>
+                <option value="12" {% if mes_inicio == "12" %}selected{% endif %}>Diciembre</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="form-label small mb-1">Mes fin</label>
+              <select name="mes_fin" class="form-select form-select-sm">
+
+                <option value="1"  {% if mes_fin == "1" %}selected{% endif %}>Enero</option>
+                <option value="2"  {% if mes_fin == "2" %}selected{% endif %}>Febrero</option>
+                <option value="3"  {% if mes_fin == "3" %}selected{% endif %}>Marzo</option>
+                <option value="4"  {% if mes_fin == "4" %}selected{% endif %}>Abril</option>
+                <option value="5"  {% if mes_fin == "5" %}selected{% endif %}>Mayo</option>
+                <option value="6"  {% if mes_fin == "6" %}selected{% endif %}>Junio</option>
+                <option value="7"  {% if mes_fin == "7" %}selected{% endif %}>Julio</option>
+                <option value="8"  {% if mes_fin == "8" %}selected{% endif %}>Agosto</option>
+                <option value="9"  {% if mes_fin == "9" %}selected{% endif %}>Septiembre</option>
+                <option value="10" {% if mes_fin == "10" %}selected{% endif %}>Octubre</option>
+                <option value="11" {% if mes_fin == "11" %}selected{% endif %}>Noviembre</option>
+                <option value="12" {% if mes_fin == "12" %}selected{% endif %}>Diciembre</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rango libre -->
+        <div id="grupo_rango" class="border rounded p-2">
+          <div class="small text-muted mb-2">Rango exacto por fechas</div>
+          <div class="d-flex flex-wrap gap-2">
+            <div>
+              <label class="form-label small mb-1">Desde</label>
+              <input type="date" name="fecha_desde" class="form-control form-control-sm" value="{{ fecha_desde }}">
+            </div>
+            <div>
+              <label class="form-label small mb-1">Hasta</label>
+              <input type="date" name="fecha_hasta" class="form-control form-control-sm" value="{{ fecha_hasta }}">
+            </div>
+          </div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary btn-sm" type="submit">
+            Aplicar
+          </button>
+          <a class="btn btn-outline-secondary btn-sm" href="{% url 'dashboard' %}">
+            Total
+          </a>
+        </div>
+
+      </div>
+    </div>
+  </form>
 
   <!-- KPIs -->
   <div class="row g-3 mb-4">
@@ -41,7 +154,7 @@
     <div class="col-12 col-md-6 col-xl-3">
       <div class="card shadow-sm h-100 border-start border-4 border-warning">
         <div class="card-body">
-          <div class="text-muted small">Cuotas vencidas</div>
+          <div class="text-muted small">Cuotas vencidas ({{ rango_label|default:"Histórico total" }})</div>
           <div class="fs-3 fw-semibold">{{ kpis.cuotas_vencidas|default:0 }}</div>
           <div class="small text-muted">Saldo vencido: <span class="fw-semibold">{{ kpis.saldo_vencido|default:0|moneda_puntos }}</span></div>
         </div>
@@ -51,30 +164,13 @@
     <div class="col-12 col-md-6 col-xl-3">
       <div class="card shadow-sm h-100 border-start border-4 border-success">
         <div class="card-body">
-          <div class="text-muted small">Ingresos del mes</div>
+          <div class="text-muted small">Ingresos del periodo</div>
           <div class="fs-3 fw-semibold">{{ kpis.ingresos_mes|default:0|moneda_puntos }}</div>
-          <div class="small text-muted">Solo estado <span class="fw-semibold">ACTIVO</span></div>
+          <div class="small text-muted">Periodo: <span class="fw-semibold">{{ rango_label|default:"Histórico total" }}</span></div>
         </div>
       </div>
     </div>
 
-  </div>
-
-  <!-- Alertas operativas -->
-  <div class="row g-3 mb-4">
-    <div class="col-12">
-      <div class="alert alert-light border d-flex flex-wrap justify-content-between align-items-center gap-2 mb-0">
-        <div>
-          <div class="fw-semibold">Resumen rápido</div>
-          <div class="text-muted small">Hoy: {{ hoy|date:"Y-m-d" }}</div>
-        </div>
-        <div class="d-flex flex-wrap gap-2">
-          <a href="{% url 'listado_cxc' %}" class="btn btn-outline-dark btn-sm">Ir a CxC</a>
-          <a href="{% url 'listar_estudiantes' %}" class="btn btn-outline-primary btn-sm">Ver estudiantes</a>
-          <a href="{% url 'nuevo_ingreso' %}" class="btn btn-outline-success btn-sm">Reportar ingreso</a>
-        </div>
-      </div>
-    </div>
   </div>
 
   <!-- Gráficas -->
@@ -83,7 +179,7 @@
     <div class="col-12 col-xl-8">
       <div class="card shadow-sm h-100">
         <div class="card-header bg-white">
-          <div class="fw-semibold">Ingresos últimos 6 meses</div>
+          <div class="fw-semibold">Ingresos ({{ rango_label|default:"Histórico total" }})</div>
           <div class="text-muted small">Serie mensual (estado ACTIVO)</div>
         </div>
         <div class="card-body">
@@ -97,7 +193,7 @@
     <div class="col-12 col-xl-4">
       <div class="card shadow-sm h-100">
         <div class="card-header bg-white">
-          <div class="fw-semibold">Top sedes por ingresos (mes)</div>
+          <div class="fw-semibold">Top sedes por ingresos ({{ rango_label|default:"Histórico total" }})</div>
           <div class="text-muted small">Ranking de recaudo</div>
         </div>
         <div class="card-body">
@@ -149,12 +245,37 @@
 
 <!-- Scripts (Chart.js) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
   (function () {
+    // ==========================
+    // UI: mostrar/ocultar inputs según método
+    // ==========================
+    const mTotal = document.getElementById('m_total');
+    const mAnio  = document.getElementById('m_anio');
+    const mRango = document.getElementById('m_rango');
+
+    const grupoAnio = document.getElementById('grupo_anio_meses');
+    const grupoRango = document.getElementById('grupo_rango');
+
+    function toggleGrupos() {
+      const metodo = (mAnio && mAnio.checked) ? 'anio_meses' : (mRango && mRango.checked) ? 'rango' : 'total';
+      if (grupoAnio)  grupoAnio.style.display  = (metodo === 'anio_meses') ? '' : 'none';
+      if (grupoRango) grupoRango.style.display = (metodo === 'rango') ? '' : 'none';
+    }
+
+    if (mTotal) mTotal.addEventListener('change', toggleGrupos);
+    if (mAnio)  mAnio.addEventListener('change', toggleGrupos);
+    if (mRango) mRango.addEventListener('change', toggleGrupos);
+    toggleGrupos();
+
+    // ==========================
+    // Charts
+    // ==========================
     const ingresos6m = JSON.parse('{{ chart_ingresos_6m|default:"{}"|escapejs }}');
     const topSedes = JSON.parse('{{ chart_top_sedes|default:"{}"|escapejs }}');
 
-    // Ingresos 6m
+    // Ingresos
     const labels6m = ingresos6m.labels || [];
     const values6m = ingresos6m.values || [];
     const ctx1 = document.getElementById('chartIngresos6m');
@@ -173,12 +294,8 @@
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: {
-            legend: { display: true }
-          },
-          scales: {
-            y: { beginAtZero: true }
-          }
+          plugins: { legend: { display: true } },
+          scales: { y: { beginAtZero: true } }
         }
       });
     }
@@ -201,12 +318,8 @@
           indexAxis: 'y',
           responsive: true,
           maintainAspectRatio: false,
-          plugins: {
-            legend: { display: true }
-          },
-          scales: {
-            x: { beginAtZero: true }
-          }
+          plugins: { legend: { display: true } },
+          scales: { x: { beginAtZero: true } }
         }
       });
     }

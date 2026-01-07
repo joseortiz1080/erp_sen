@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}No autorizado{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="alert alert-danger shadow-sm">
+    <h4 class="mb-1">Acceso no autorizado</h4>
+    <div class="text-muted">
+      No tiene permisos para ver esta vista. Si considera que es un error, contacte a un administrador.
+    </div>
+  </div>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-primary">Ir al dashboard</a>
+</div>
+{% endblock %}
