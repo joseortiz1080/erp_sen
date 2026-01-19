@@ -5,6 +5,12 @@ import re
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 from .models import Acudiente, Estudiante, Contrato, Ingreso, Sede, MedioPago
+from gestion_clientes.models import (
+    Gasto,
+    ConceptoGasto,
+    MedioPago,
+    Sede,
+)
 
 
 # ==========================================================
@@ -90,12 +96,37 @@ class EstudianteForm(forms.ModelForm):
         }
 
     def __init__(self, *args, **kwargs):
+        user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
+
+        # Requeridos (se deja igual)
         for f in ["nombre_completo", "tipo_documento", "documento", "fecha_nacimiento",
-                  "nivel", "sede", "estado", "horario"]:
+                "nivel", "sede", "estado", "horario"]:
             if f in self.fields:
                 self.fields[f].required = True
                 self.fields[f].error_messages["required"] = "Este campo es obligatorio."
+
+        # =========================
+        # SEGURIDAD POR SEDE (dropdown + validación server-side)
+        # =========================
+        if 'sede' in self.fields:
+            self.fields['sede'].queryset = Sede.objects.none()
+
+            if not user:
+                return
+
+            # Admin / CEO / CFO / superuser: ven todas
+            if user.is_superuser or user.groups.filter(name__in=['Admin', 'CEO', 'CFO']).exists():
+                self.fields['sede'].queryset = Sede.objects.all()
+                return
+
+            # Resto (ej: Secretaria, Coordinador): solo sedes asignadas
+            perfil = getattr(user, 'perfil', None)
+            if perfil:
+                if hasattr(perfil, 'sedes'):  # ManyToMany
+                    self.fields['sede'].queryset = perfil.sedes.all()
+                elif getattr(perfil, 'sede_id', None):  # ForeignKey
+                    self.fields['sede'].queryset = Sede.objects.filter(pk=perfil.sede_id)
 
     def clean_nombre_completo(self):
         nombre = (self.cleaned_data.get("nombre_completo") or "").strip()
@@ -176,6 +207,7 @@ class ContratoForm(forms.ModelForm):
             "fecha_fin": forms.DateInput(attrs={"type": "date", "class": "form-control", "readonly": "readonly"}),
             "estado": forms.HiddenInput(),
         }
+        exclude = ("fecha_creacion",)
 
     # ---------------------------
     # Normalizador COP (ENTEROS)
@@ -329,3 +361,44 @@ class IngresoForm(forms.ModelForm):
                     self.fields['sede'].queryset = perfil.sedes.all()
                 elif getattr(perfil, 'sede_id', None):  # ForeignKey
                     self.fields['sede'].queryset = Sede.objects.filter(pk=perfil.sede_id)
+
+class GastoForm(forms.ModelForm):
+    class Meta:
+        model = Gasto
+        fields = [
+            'sede', 'fecha_gasto', 'concepto_gasto', 'medio_pago',
+            'valor', 'referencia_factura', 'referencia', 'observacion'
+        ]
+        widgets = {
+            'fecha_gasto': forms.DateInput(attrs={'type': 'date', 'class': 'form-control'}),
+            'valor': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01', 'min': '0'}),
+            'referencia_factura': forms.TextInput(attrs={'class': 'form-control'}),
+            'referencia': forms.TextInput(attrs={'class': 'form-control'}),
+            'observacion': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        sedes_qs = kwargs.pop('sedes_qs', None)
+        super().__init__(*args, **kwargs)
+
+        self.fields['sede'].widget.attrs.update({'class': 'form-select'})
+        self.fields['concepto_gasto'].widget.attrs.update({'class': 'form-select'})
+        self.fields['medio_pago'].widget.attrs.update({'class': 'form-select'})
+
+        self.fields['concepto_gasto'].queryset = ConceptoGasto.objects.filter(activo=1).order_by('categoria', 'nombre')
+        self.fields['medio_pago'].queryset = MedioPago.objects.all().order_by('nombre')
+
+        if sedes_qs is not None:
+            self.fields['sede'].queryset = sedes_qs
+
+    def clean_valor(self):
+        v = self.cleaned_data.get('valor')
+        if v is None or v <= 0:
+            raise forms.ValidationError("El valor debe ser mayor a 0.")
+        return v
+
+    def clean_referencia_factura(self):
+        x = (self.cleaned_data.get('referencia_factura') or '').strip()
+        if not x:
+            raise forms.ValidationError("La referencia / factura es obligatoria.")
+        return x

@@ -1,6 +1,5 @@
 from django.contrib import admin
 from django.urls import path
-
 from gestion_clientes.views import (
     login_view,            # login
     vista_inicial,         # /
@@ -20,6 +19,9 @@ from gestion_clientes.views import (
     custom_403,
     admin_roles_permisos,
     admin_usuarios_roles,
+    crear_gasto,
+    listar_gastos,
+    anular_gasto,
 )
 
 urlpatterns = [
@@ -44,6 +46,9 @@ urlpatterns = [
     path('api/medios-pago/', listar_medios_pago, name='listar_medios_pago'),
     path('seguridad/roles-permisos/', admin_roles_permisos, name='admin_roles_permisos'),
     path('seguridad/usuarios-roles/', admin_usuarios_roles, name='admin_usuarios_roles'),
+    path('gastos/nuevo/', crear_gasto, name='crear_gasto'),
+    path('gastos/', listar_gastos, name='listar_gastos'),
+    path('gastos/anular/<int:gasto_id>/', anular_gasto, name='anular_gasto'),
 ]
 
 # Custom error handlers

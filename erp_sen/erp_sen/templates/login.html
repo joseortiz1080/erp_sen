@@ -34,20 +34,39 @@
 
     <div class="login-card text-center">
         <h4 class="mb-4">Iniciar Sesión</h4>
+
         {% if error %}
             <div class="alert alert-danger" role="alert">
                 Credenciales inválidas.
             </div>
         {% endif %}
-        <form method="post">
+
+        <form method="post" action="{% url 'login' %}">
             {% csrf_token %}
+
             <div class="form-floating mb-3">
-                <input type="text" name="username" class="form-control" id="inputEmail" placeholder="Correo electrónico" required>
+                <input
+                    type="text"
+                    name="username"
+                    class="form-control"
+                    id="inputEmail"
+                    placeholder="Correo electrónico"
+                    autocomplete="username"
+                    required
+                >
                 <label for="inputEmail">Correo electrónico</label>
             </div>
 
             <div class="form-floating mb-4">
-                <input type="password" name="password" class="form-control" id="inputPassword" placeholder="Contraseña" required>
+                <input
+                    type="password"
+                    name="password"
+                    class="form-control"
+                    id="inputPassword"
+                    placeholder="Contraseña"
+                    autocomplete="current-password"
+                    required
+                >
                 <label for="inputPassword">Contraseña</label>
             </div>
 

@@ -13,7 +13,7 @@
 {% block content %}
 <div class="container-xl py-4">
   <div class="d-flex align-items-center justify-content-between mb-3">
-    <h2 class="mb-0">Crear nuevo contrato Es este </h2>
+    <h2 class="mb-0">Crear nuevo contrato</h2>
     <a href="{% url 'listado_cxc' %}" class="btn btn-outline-secondary btn-sm">Volver</a>
   </div>
 
@@ -323,7 +323,7 @@
             <label class="form-label">Número de cuotas</label>
             {{ form_contrato.numero_cuotas|add_class:"form-select"|attr:"id:numero_cuotas" }}
             {% for error in form_contrato.numero_cuotas.errors %}
-              <div class="text-danger small">{{ error }}</div>
+              <div class="text-danger small">{{ error }}</div>. 
             {% endfor %}
           </div>
 

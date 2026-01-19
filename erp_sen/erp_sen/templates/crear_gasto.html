@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  {# Alerts: mensajes del sistema + errores no asociados a un campo #}
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags }} mb-3" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if form.non_field_errors %}
+    <div class="alert alert-danger mb-3" role="alert">
+      {{ form.non_field_errors }}
+    </div>
+  {% endif %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Registrar Gasto</h3>
+  </div>
+
+  <form method="post" class="card p-3">
+    {% csrf_token %}
+
+    <div class="row g-3">
+      <div class="col-md-4">{{ form.sede.label_tag }}{{ form.sede }}{{ form.sede.errors }}</div>
+      <div class="col-md-4">{{ form.fecha_gasto.label_tag }}{{ form.fecha_gasto }}{{ form.fecha_gasto.errors }}</div>
+      <div class="col-md-4">{{ form.medio_pago.label_tag }}{{ form.medio_pago }}{{ form.medio_pago.errors }}</div>
+
+      <div class="col-md-6">{{ form.concepto_gasto.label_tag }}{{ form.concepto_gasto }}{{ form.concepto_gasto.errors }}</div>
+      <div class="col-md-3">{{ form.valor.label_tag }}{{ form.valor }}{{ form.valor.errors }}</div>
+      <div class="col-md-3">{{ form.referencia_factura.label_tag }}{{ form.referencia_factura }}{{ form.referencia_factura.errors }}</div>
+
+      <div class="col-md-12">{{ form.referencia.label_tag }}{{ form.referencia }}{{ form.referencia.errors }}</div>
+      <div class="col-md-12">{{ form.observacion.label_tag }}{{ form.observacion }}{{ form.observacion.errors }}</div>
+    </div>
+
+    <div class="mt-3">
+      <button class="btn btn-primary">Reportar Gasto</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

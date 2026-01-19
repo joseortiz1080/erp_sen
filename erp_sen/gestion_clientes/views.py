@@ -19,7 +19,7 @@ from .forms import AcudienteForm, EstudianteForm, ContratoForm, IngresoForm
 from .models import (
     Estudiante, Contrato, Cuota, Ingreso, Nivel, Horario, Sede, Acudiente,
     MedioPago, ConceptoIngreso, PagoAplicacion, ConsecutivoComprobante,
-    Permiso, Rol, RolPermiso, UsuarioRol
+    Permiso, Rol, RolPermiso, UsuarioRol, ConceptoGasto, Gasto, MedioPago
 )
 from django.views.decorators.csrf import ensure_csrf_cookie
 
@@ -28,6 +28,11 @@ from django.http import HttpResponse
 
 from django.template import TemplateDoesNotExist
 from functools import wraps
+
+from django.contrib import messages
+from .forms import GastoForm
+from .models import Sede
+from django.db import transaction
 
 
 # ============================
@@ -351,11 +356,13 @@ def admin_usuarios_roles(request):
 @login_required
 def listar_medios_pago(request):
     """
-    Retorna medios de pago activos desde gestion_finanzas_medio_pago
+    Retorna medios de pago activos.
+    UI: excluye 'Banco' sin eliminarlo de BD (se mantiene para cargues masivos).
     """
     medios = list(
         MedioPago.objects
         .filter(activo=True)
+        .exclude(nombre__iexact='Banco')
         .order_by('nombre')
         .values('id', 'nombre')
     )
@@ -443,7 +450,8 @@ def dashboard_view(request):
     import calendar
     from datetime import date
     from django.db.models import Sum, F, Value, Q, DecimalField
-    from django.db.models.functions import Coalesce, TruncMonth
+    from django.db.models.functions import Coalesce, TruncMonth, Cast
+    from django.db.models import DateField
     from django.utils.dateparse import parse_date
 
     hoy = now().date()
@@ -458,6 +466,12 @@ def dashboard_view(request):
     def _month_end(y: int, m: int) -> date:
         last_day = calendar.monthrange(y, m)[1]
         return date(y, m, last_day)
+    
+    def _add_months(d: date, months: int) -> date:
+        y = d.year + (d.month - 1 + months) // 12
+        m = (d.month - 1 + months) % 12 + 1
+        day = min(d.day, calendar.monthrange(y, m)[1])
+        return date(y, m, day)
 
     # =====================================================
     # QuerySets base (respetando sede)
@@ -467,11 +481,17 @@ def dashboard_view(request):
     cuotas_qs = Cuota.objects.select_related('contrato__estudiante__sede')
     ingresos_qs = Ingreso.objects.select_related('sede').filter(estado='ACTIVO')
 
+    # (NUEVO) Gastos base
+    gastos_qs = Gasto.objects.select_related('sede').filter(estado='ACTIVO')
+
     if sede_ids:
         estudiantes_qs = estudiantes_qs.filter(sede_id__in=sede_ids)
         contratos_qs = contratos_qs.filter(estudiante__sede_id__in=sede_ids)
         cuotas_qs = cuotas_qs.filter(contrato__estudiante__sede_id__in=sede_ids)
         ingresos_qs = ingresos_qs.filter(sede_id__in=sede_ids)
+
+        # (NUEVO) Seguridad por sede para gastos
+        gastos_qs = gastos_qs.filter(sede_id__in=sede_ids)
 
     # =====================================================
     # (NUEVO) Años disponibles (por data real en ingresos)
@@ -628,6 +648,243 @@ def dashboard_view(request):
     )
 
     # =====================================================
+    # (NUEVO) Gastos del periodo (mismo rango)
+    # =====================================================
+    gastos_periodo_qs = gastos_qs.filter(fecha_gasto__lte=fecha_hasta)
+    if fecha_desde:
+        gastos_periodo_qs = gastos_periodo_qs.filter(fecha_gasto__gte=fecha_desde)
+
+    gastos_periodo = (
+        gastos_periodo_qs.aggregate(
+            total=Coalesce(Sum('valor'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
+        )['total']
+        or Decimal('0.00')
+    )
+
+    # =====================================================
+    # (NUEVO) Saldo del periodo (ingresos - gastos)
+    # =====================================================
+    saldo_periodo = (ingresos_periodo or Decimal('0.00')) - (gastos_periodo or Decimal('0.00'))
+
+    # =====================================================
+    # (NUEVO) Resumen por sede (ingreso, gasto, saldo) - mismo rango
+    # =====================================================
+    ingresos_por_sede_rows = (
+        ingresos_periodo_qs
+        .values('sede_id', 'sede__nombre')
+        .annotate(total_ingresos=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('sede__nombre')
+    )
+
+    gastos_por_sede_rows = (
+        gastos_periodo_qs
+        .values('sede_id', 'sede__nombre')
+        .annotate(total_gastos=Coalesce(Sum('valor'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('sede__nombre')
+    )
+
+    sede_map = {}
+    for r in ingresos_por_sede_rows:
+        sede_map[r['sede_id']] = {
+            'sede_id': r['sede_id'],
+            'sede_nombre': r['sede__nombre'] or '',
+            'ingresos': r['total_ingresos'] or Decimal('0.00'),
+            'gastos': Decimal('0.00'),
+            'saldo': Decimal('0.00'),
+        }
+
+    for r in gastos_por_sede_rows:
+        if r['sede_id'] not in sede_map:
+            sede_map[r['sede_id']] = {
+                'sede_id': r['sede_id'],
+                'sede_nombre': r['sede__nombre'] or '',
+                'ingresos': Decimal('0.00'),
+                'gastos': r['total_gastos'] or Decimal('0.00'),
+                'saldo': Decimal('0.00'),
+            }
+        else:
+            sede_map[r['sede_id']]['gastos'] = r['total_gastos'] or Decimal('0.00')
+
+    resumen_por_sede = []
+    for _, v in sede_map.items():
+        v['saldo'] = (v['ingresos'] or Decimal('0.00')) - (v['gastos'] or Decimal('0.00'))
+        resumen_por_sede.append(v)
+
+    resumen_por_sede.sort(key=lambda x: (x['sede_nombre'] or ''))
+
+    # =====================================================
+    # (NUEVO) Resumen por medio de pago (ingreso, gasto, saldo) - mismo rango
+    # =====================================================
+    ingresos_por_medio_rows = (
+        ingresos_periodo_qs
+        .exclude(medio_pago_id__isnull=True)
+        .values('medio_pago_id', 'medio_pago__nombre')
+        .annotate(total_ingresos=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('medio_pago__nombre')
+    )
+
+    gastos_por_medio_rows = (
+        gastos_periodo_qs
+        .exclude(medio_pago_id__isnull=True)
+        .values('medio_pago_id', 'medio_pago__nombre')
+        .annotate(total_gastos=Coalesce(Sum('valor'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
+        .order_by('medio_pago__nombre')
+    )
+
+    medio_map = {}
+    for r in ingresos_por_medio_rows:
+        medio_map[r['medio_pago_id']] = {
+            'medio_id': r['medio_pago_id'],
+            'medio_nombre': r['medio_pago__nombre'] or '',
+            'ingresos': r['total_ingresos'] or Decimal('0.00'),
+            'gastos': Decimal('0.00'),
+            'saldo': Decimal('0.00'),
+        }
+
+    for r in gastos_por_medio_rows:
+        if r['medio_pago_id'] not in medio_map:
+            medio_map[r['medio_pago_id']] = {
+                'medio_id': r['medio_pago_id'],
+                'medio_nombre': r['medio_pago__nombre'] or '',
+                'ingresos': Decimal('0.00'),
+                'gastos': r['total_gastos'] or Decimal('0.00'),
+                'saldo': Decimal('0.00'),
+            }
+        else:
+            medio_map[r['medio_pago_id']]['gastos'] = r['total_gastos'] or Decimal('0.00')
+
+    resumen_por_medio = []
+    for _, v in medio_map.items():
+        v['saldo'] = (v['ingresos'] or Decimal('0.00')) - (v['gastos'] or Decimal('0.00'))
+        resumen_por_medio.append(v)
+
+    resumen_por_medio.sort(key=lambda x: (x['medio_nombre'] or ''))
+
+    # =====================================================
+    # (NUEVO) Resumen combinado: Sede -> Medio -> Totales
+    # Jerarquía requerida:
+    # - Sede
+    #   - Método de pago
+    #   - Total sede
+    # - Total instituto
+    # =====================================================
+
+    # Ingresos por sede+medio
+    ingresos_sede_medio_rows = (
+        ingresos_periodo_qs
+        .exclude(medio_pago_id__isnull=True)
+        .values('sede_id', 'sede__nombre', 'medio_pago_id', 'medio_pago__nombre')
+        .annotate(
+            total_ingresos=Coalesce(
+                Sum('valor_pagado'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .order_by('sede__nombre', 'medio_pago__nombre')
+    )
+
+    # Gastos por sede+medio
+    gastos_sede_medio_rows = (
+        gastos_periodo_qs
+        .exclude(medio_pago_id__isnull=True)
+        .values('sede_id', 'sede__nombre', 'medio_pago_id', 'medio_pago__nombre')
+        .annotate(
+            total_gastos=Coalesce(
+                Sum('valor'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .order_by('sede__nombre', 'medio_pago__nombre')
+    )
+
+    # Mapa Sede -> Medio
+    sede_medio_map = {}
+
+    for r in ingresos_sede_medio_rows:
+        sid = r['sede_id']
+        mid = r['medio_pago_id']
+        sede_nombre = r.get('sede__nombre') or ''
+        medio_nombre = r.get('medio_pago__nombre') or ''
+
+        if sid not in sede_medio_map:
+            sede_medio_map[sid] = {
+                'sede_id': sid,
+                'sede_nombre': sede_nombre,
+                'medios': {},
+                'total_ingresos': Decimal('0.00'),
+                'total_gastos': Decimal('0.00'),
+                'total_saldo': Decimal('0.00'),
+            }
+
+        if mid not in sede_medio_map[sid]['medios']:
+            sede_medio_map[sid]['medios'][mid] = {
+                'medio_id': mid,
+                'medio_nombre': medio_nombre,
+                'ingresos': Decimal('0.00'),
+                'gastos': Decimal('0.00'),
+                'saldo': Decimal('0.00'),
+            }
+
+        sede_medio_map[sid]['medios'][mid]['ingresos'] = r.get('total_ingresos') or Decimal('0.00')
+
+    for r in gastos_sede_medio_rows:
+        sid = r['sede_id']
+        mid = r['medio_pago_id']
+        sede_nombre = r.get('sede__nombre') or ''
+        medio_nombre = r.get('medio_pago__nombre') or ''
+
+        if sid not in sede_medio_map:
+            sede_medio_map[sid] = {
+                'sede_id': sid,
+                'sede_nombre': sede_nombre,
+                'medios': {},
+                'total_ingresos': Decimal('0.00'),
+                'total_gastos': Decimal('0.00'),
+                'total_saldo': Decimal('0.00'),
+            }
+
+        if mid not in sede_medio_map[sid]['medios']:
+            sede_medio_map[sid]['medios'][mid] = {
+                'medio_id': mid,
+                'medio_nombre': medio_nombre,
+                'ingresos': Decimal('0.00'),
+                'gastos': Decimal('0.00'),
+                'saldo': Decimal('0.00'),
+            }
+
+        sede_medio_map[sid]['medios'][mid]['gastos'] = r.get('total_gastos') or Decimal('0.00')
+
+    # Lista final ordenada + totales por sede
+    resumen_sede_medio = []
+    for _, sede_obj in sede_medio_map.items():
+        medios_list = []
+        total_ing = Decimal('0.00')
+        total_gas = Decimal('0.00')
+
+        for _, m in sede_obj['medios'].items():
+            ing = m.get('ingresos') or Decimal('0.00')
+            gas = m.get('gastos') or Decimal('0.00')
+            m['saldo'] = ing - gas
+            total_ing += ing
+            total_gas += gas
+            medios_list.append(m)
+
+        medios_list.sort(key=lambda x: (x.get('medio_nombre') or ''))
+        sede_obj['medios'] = medios_list
+
+        sede_obj['total_ingresos'] = total_ing
+        sede_obj['total_gastos'] = total_gas
+        sede_obj['total_saldo'] = total_ing - total_gas
+
+        # Solo sedes con movimiento por medio
+        if medios_list:
+            resumen_sede_medio.append(sede_obj)
+
+    resumen_sede_medio.sort(key=lambda x: (x.get('sede_nombre') or ''))
+
+    # =====================================================
     # Series para gráficas (mismo rango)
     # =====================================================
     ingresos_rows = (
@@ -648,13 +905,106 @@ def dashboard_view(request):
     top_sedes_rows = (
         ingresos_periodo_qs
         .values('sede__nombre')
-        .annotate(total=Coalesce(Sum('valor_pagado'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)))
-        .order_by('-total')[:5]
+        .annotate(
+            total_ingresos=Coalesce(
+                Sum('valor_pagado'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .order_by('-total_ingresos')[:5]
     )
 
     top_sedes_labels = [r['sede__nombre'] or '' for r in top_sedes_rows]
-    top_sedes_values = [float(r['total'] or 0) for r in top_sedes_rows]
+    top_sedes_ingresos = [float(r['total_ingresos'] or 0) for r in top_sedes_rows]
 
+    # Gastos de esas mismas sedes (mismo orden del ranking)
+    gastos_map = {
+        (r['sede__nombre'] or ''): float(r['total_gastos'] or 0)
+        for r in (
+            gastos_periodo_qs
+            .values('sede__nombre')
+            .annotate(
+                total_gastos=Coalesce(
+                    Sum('valor'),
+                    Value(0),
+                    output_field=DecimalField(max_digits=12, decimal_places=2)
+                )
+            )
+        )
+    }
+
+    top_sedes_gastos = [gastos_map.get(nombre, 0.0) for nombre in top_sedes_labels]
+
+    # =====================================================
+    # (NUEVO) Gráfico principal: Proyección vs Ejecución
+    # Proyección: Cuota.valor por mes de fecha_vencimiento
+    # Ejecución: PagoAplicacion.valor_aplicado por mes de fecha_aplicacion
+    # Filtra: Ingreso.estado='ACTIVO'
+    # Incluye: cuota 0
+    # Horizonte: 24 meses (12 atrás + 12 adelante)
+    # =====================================================
+
+    inicio_24m = _add_months(hoy.replace(day=1), -11)
+    fin_tmp = _add_months(hoy.replace(day=1), 12)
+    fin_24m = _month_end(fin_tmp.year, fin_tmp.month)
+
+    # ---------- PROYECCIÓN ----------
+    proyeccion_rows = (
+        cuotas_qs
+        .filter(
+            fecha_vencimiento__gte=inicio_24m,
+            fecha_vencimiento__lte=fin_24m
+        )
+        .annotate(mes=TruncMonth('fecha_vencimiento'))
+        .values('mes')
+        .annotate(
+            total=Coalesce(
+                Sum('valor'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .order_by('mes')
+    )
+
+    # ---------- EJECUCIÓN ----------
+    ejecucion_rows = (
+        PagoAplicacion.objects
+        .select_related('ingreso', 'cuota')
+        .filter(
+            fecha_aplicacion__gte=inicio_24m,
+            fecha_aplicacion__lte=fin_24m,
+            ingreso__estado='ACTIVO'
+        )
+        .annotate(mes=TruncMonth(Cast('fecha_aplicacion', DateField())))
+        .values('mes')
+        .annotate(
+            total=Coalesce(
+                Sum('valor_aplicado'),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            )
+        )
+        .order_by('mes')
+    )
+
+    # ---------- Normalización 24 meses ----------
+    proj_map = {r['mes'].strftime('%Y-%m'): (r['total'] or 0) for r in proyeccion_rows if r.get('mes')}
+    ejec_map = {r['mes'].strftime('%Y-%m'): (r['total'] or 0) for r in ejecucion_rows if r.get('mes')}
+
+    labels_pe = []
+    proyeccion_vals = []
+    ejecucion_vals = []
+
+    cursor = inicio_24m
+    for _ in range(24):
+        ym = cursor.strftime('%Y-%m')
+        labels_pe.append(ym)
+        proyeccion_vals.append(float(proj_map.get(ym, 0) or 0))
+        ejecucion_vals.append(float(ejec_map.get(ym, 0) or 0))
+        cursor = _add_months(cursor, 1)
+        
     # =====================================================
     # Context
     # =====================================================
@@ -669,7 +1019,16 @@ def dashboard_view(request):
             'ingresos_mes': ingresos_periodo,
         },
         'chart_ingresos_6m': json.dumps({'labels': labels, 'values': values}),
-        'chart_top_sedes': json.dumps({'labels': top_sedes_labels, 'values': top_sedes_values}),
+        'chart_top_sedes': json.dumps({
+            'labels': top_sedes_labels,
+            'ingresos': top_sedes_ingresos,
+            'gastos': top_sedes_gastos
+        }),
+        'chart_proyeccion_vs_ejecucion': json.dumps({
+            'labels': labels_pe,
+            'proyeccion': proyeccion_vals,
+            'ejecucion': ejecucion_vals
+            }),
         'hoy': hoy,
 
         # Filtro UI
@@ -681,9 +1040,21 @@ def dashboard_view(request):
         'fecha_desde': fecha_desde.strftime('%Y-%m-%d') if fecha_desde else '',
         'fecha_hasta': fecha_hasta.strftime('%Y-%m-%d') if fecha_hasta else '',
         'rango_label': rango_label,
+
+        # =====================================================
+        # (NUEVO) Finanzas ejecutivas (periodo)
+        # =====================================================
+        'ingresos_periodo': ingresos_periodo,
+        'gastos_periodo': gastos_periodo,
+        'saldo_periodo': saldo_periodo,
+
+        'resumen_por_sede': resumen_por_sede,
+        'resumen_por_medio': resumen_por_medio,
+        'resumen_sede_medio': resumen_sede_medio,
     }
 
     return render(request, 'dashboard.html', context)
+
 
 
 
@@ -1458,7 +1829,14 @@ def aplicar_pago(request):
     medio_pago = MedioPago.objects.filter(id=medio_pago_id, activo=True).first()
     if not medio_pago:
         return JsonResponse({'ok': False, 'error': 'Medio de pago no válido o inactivo.'}, status=400)
-    
+
+    # Bloqueo lógico: no permitir "Banco" por UI ni por POST manipulado
+    if (medio_pago.nombre or '').strip().casefold() == 'banco':
+        return JsonResponse(
+            {'ok': False, 'error': 'No se permite registrar pagos con el medio "Banco".'},
+            status=400
+        )
+        
     if not cuota_id:
         return JsonResponse({'ok': False, 'error': 'Falta cuota_id.'}, status=400)
 
@@ -1841,7 +2219,7 @@ def nuevo_contrato(request):
     # =========================
     if request.method == 'POST':
 
-        estudiante_form = EstudianteForm(request.POST, prefix='estudiante')
+        estudiante_form = EstudianteForm(request.POST, prefix='estudiante', user=request.user)
 
         post_contrato = request.POST.copy()
         if not post_contrato.get('estado'):
@@ -1998,7 +2376,7 @@ def nuevo_contrato(request):
                     cuota0 = Cuota.objects.create(
                         contrato=contrato,
                         numero=0,
-                        fecha_vencimiento=fecha_inicio,
+                        fecha_vencimiento=now().date(),
                         valor=cuota_inicial,
                         valor_pagado=cuota_inicial,
                         estado='Pagada'
@@ -2063,7 +2441,7 @@ def nuevo_contrato(request):
     # =========================
     return render(request, 'nuevo_contrato.html', {
         'form_acudiente': AcudienteForm(prefix='acudiente'),
-        'form_estudiante': EstudianteForm(prefix='estudiante'),
+        'form_estudiante': EstudianteForm(prefix='estudiante', user=request.user),
         'form_contrato': ContratoForm(),
     })
     
@@ -2463,3 +2841,368 @@ def buscar_estudiante(request):
         'hoy': hoy,
         'limit': LIMIT_RESULTADOS,
     })
+
+@login_required
+@permiso_requerido("gastos_crear")
+def crear_gasto(request):
+    """Crea un gasto (CE) con consecutivo por sede/año.
+
+    Reglas:
+    - Usuario restringido por sedes: solo puede crear en sus sedes.
+    - Usuario global (superuser / CEO / CFO / Dev_icaro): puede crear en cualquier sede.
+    """
+    from datetime import date
+    from django.db import connection
+    from django.utils import timezone
+
+    # -----------------------------
+    # Helper: usuario global (misma regla aplicada en gastos)
+    # -----------------------------
+    def es_usuario_global(user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        if (getattr(user, "username", "") or "").strip() == "Dev_icaro":
+            return True
+        return user.groups.filter(name__in=["CEO", "CFO"]).exists()
+
+    puede_ver_todas = es_usuario_global(request.user)
+
+    sede_ids = user_sede_ids(request.user)
+
+    # Blindaje: si NO es global y no tiene sedes asignadas => no puede crear
+    if (not puede_ver_todas) and (not sede_ids):
+        return render(request, "403.html", status=403)
+
+    # Sedes disponibles para el formulario
+    sedes_qs = (
+        Sede.objects.all().order_by("nombre")
+        if puede_ver_todas
+        else Sede.objects.filter(id__in=sede_ids).order_by("nombre")
+    )
+
+    if request.method == "POST":
+        form = GastoForm(request.POST, sedes_qs=sedes_qs)
+
+        if not form.is_valid():
+            messages.error(request, "Revise los campos marcados. Hay errores de validación.")
+            # CLAVE: aquí el usuario debe ver errores (ver nota de template abajo)
+            return render(request, "crear_gasto.html", {"form": form})
+
+        sede = form.cleaned_data["sede"]
+        year = date.today().year
+
+        # Seguridad adicional: si no es global, validar sede dentro de asignadas
+        if (not puede_ver_todas) and sede_ids and (sede.id not in set(sede_ids)):
+            return render(request, "403.html", status=403)
+
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    # 1) Bloqueo del consecutivo CE por sede/año
+                    cursor.execute(
+                        """
+                        SELECT consecutivo
+                        FROM gestion_finanzas_consecutivo_comprobante
+                        WHERE sede_id=%s AND prefijo='CE' AND year=%s
+                        FOR UPDATE
+                        """,
+                        [sede.id, year],
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        messages.error(
+                            request,
+                            "No existe consecutivo CE para esta sede/año. Contacte al administrador."
+                        )
+                        return render(request, "crear_gasto.html", {"form": form})
+
+                    consecutivo_actual = int(row[0] or 0)
+                    nuevo = consecutivo_actual + 1
+                    numero_ce = f"CE-{sede.id}-{year}-{nuevo:08d}"
+
+                    # 2) Crear gasto
+                    g = form.save(commit=False)
+                    g.numero_comprobante = numero_ce
+                    g.usuario_registro_id = request.user.id
+                    g.estado = "ACTIVO"
+                    g.creado_en = timezone.now()
+                    g.actualizado_en = timezone.now()
+                    g.save()
+
+                    # 3) Actualizar consecutivo CE
+                    cursor.execute(
+                        """
+                        UPDATE gestion_finanzas_consecutivo_comprobante
+                        SET consecutivo=%s
+                        WHERE sede_id=%s AND prefijo='CE' AND year=%s
+                        """,
+                        [nuevo, sede.id, year],
+                    )
+
+            messages.success(request, f"Gasto creado correctamente: {numero_ce}")
+            return redirect("listar_gastos")
+
+        except Exception:
+            messages.error(
+                request,
+                "No fue posible guardar el gasto. Verifique consecutivo CE y datos del formulario."
+            )
+            return render(request, "crear_gasto.html", {"form": form})
+
+    # -----------------------------
+    # GET
+    # -----------------------------
+    initial = {}
+
+    # Precarga: si solo tiene 1 sede (y no es global), dejarla seleccionada
+    if (not puede_ver_todas) and sede_ids and len(set(sede_ids)) == 1:
+        initial["sede"] = sedes_qs.first()
+
+    initial["fecha_gasto"] = date.today()
+
+    form = GastoForm(initial=initial, sedes_qs=sedes_qs)
+    return render(request, "crear_gasto.html", {"form": form})
+
+@login_required
+@permiso_requerido("gastos_ver")
+def listar_gastos(request):
+    """
+    Listado de gastos (CE) con filtros y seguridad por sedes.
+    - Si el usuario NO es global => restringe por sedes asignadas (user_sede_ids) y por usuario_registro.
+    - Si el usuario ES global (CEO/CFO/Admin) => puede ver todo y filtrar por cualquier sede.
+
+    Nota: En este ERP, si un usuario NO es global y NO tiene sedes asignadas,
+    NO debe ver información (blindaje).
+    """
+    from datetime import datetime
+    from django.db.models import Q
+    from django.core.paginator import Paginator
+
+    hoy = now().date()
+
+    # ---- Seguridad: sedes asignadas ----
+    sede_ids_usuario = user_sede_ids(request.user)
+
+    # =====================================================
+    # (FIX) Definir usuarios globales sin depender de `tiene_permiso`
+    # Global = Superuser OR Groups(CEO/CFO) OR username Dev_icaro
+    # =====================================================
+    def es_usuario_global(user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        if (user.username or "").strip() == "Dev_icaro":
+            return True
+        # Por grupos (lo que ya usas en tu ERP)
+        return user.groups.filter(name__in=["CEO", "CFO"]).exists()
+
+    puede_ver_todas = es_usuario_global(request.user)
+
+    # Blindaje: si no es global y no tiene sedes asignadas => no puede ver gastos
+    if (not puede_ver_todas) and (not sede_ids_usuario):
+        return render(request, "403.html", status=403)
+
+    # ---- Parámetros de filtro ----
+    q_text = (request.GET.get('q') or '').strip()
+    estado = (request.GET.get('estado') or '').strip()  # ACTIVO / ANULADO / ''
+    sede_id = (request.GET.get('sede') or '').strip()
+    concepto_id = (request.GET.get('concepto') or '').strip()
+    medio_id = (request.GET.get('medio') or '').strip()
+    fecha_desde = (request.GET.get('fecha_desde') or '').strip()
+    fecha_hasta = (request.GET.get('fecha_hasta') or '').strip()
+
+    # ---- Paginación: opciones corporativas + validación ----
+    per_page_choices = [25, 50, 100, 200]
+
+    try:
+        per_page = int(request.GET.get('per_page', 50))
+    except (TypeError, ValueError):
+        per_page = 50
+
+    if per_page not in per_page_choices:
+        per_page = 50
+
+    page = request.GET.get('page', 1)
+
+    # ---- detectar si hay filtros activos ----
+    hay_filtros = any([
+        q_text,
+        estado,
+        sede_id,
+        concepto_id,
+        medio_id,
+        fecha_desde,
+        fecha_hasta,
+        request.GET.get('per_page'),
+    ])
+
+    # ---- Query base ----
+    qs = Gasto.objects.select_related(
+        'sede', 'concepto_gasto', 'medio_pago', 'usuario_registro'
+    ).all()
+
+    # ---- Restricción por sedes (si aplica) ----
+    if (not puede_ver_todas) and sede_ids_usuario:
+        qs = qs.filter(sede_id__in=sede_ids_usuario)
+
+    # ---- Restricción por usuario (si aplica) ----
+    # Si NO es global => solo ve sus propios gastos.
+    if not puede_ver_todas:
+        qs = qs.filter(usuario_registro_id=request.user.id)
+
+    # Filtro sede (blindado)
+    if sede_id:
+        try:
+            sede_id_int = int(sede_id)
+            if (puede_ver_todas) or (sede_id_int in (sede_ids_usuario or [])):
+                qs = qs.filter(sede_id=sede_id_int)
+        except ValueError:
+            pass
+
+    if estado:
+        qs = qs.filter(estado=estado)
+
+    if concepto_id:
+        try:
+            qs = qs.filter(concepto_gasto_id=int(concepto_id))
+        except ValueError:
+            pass
+
+    if medio_id:
+        try:
+            qs = qs.filter(medio_pago_id=int(medio_id))
+        except ValueError:
+            pass
+
+    # Fechas
+    if fecha_desde:
+        try:
+            d = datetime.strptime(fecha_desde, "%Y-%m-%d").date()
+            qs = qs.filter(fecha_gasto__gte=d)
+        except ValueError:
+            pass
+
+    if fecha_hasta:
+        try:
+            h = datetime.strptime(fecha_hasta, "%Y-%m-%d").date()
+            qs = qs.filter(fecha_gasto__lte=h)
+        except ValueError:
+            pass
+
+    # Búsqueda libre
+    if q_text:
+        qs = qs.filter(
+            Q(numero_comprobante__icontains=q_text) |
+            Q(referencia_factura__icontains=q_text) |
+            Q(referencia__icontains=q_text) |
+            Q(observacion__icontains=q_text) |
+            Q(motivo_anulacion__icontains=q_text) |
+            Q(usuario_registro__username__icontains=q_text)
+        )
+
+    # Orden
+    qs = qs.order_by('-fecha_gasto', '-id')
+
+    # Paginación
+    paginator = Paginator(qs, per_page)
+    gastos_page = paginator.get_page(page)
+
+    # ---- Combos para filtros ----
+    if (not puede_ver_todas) and sede_ids_usuario:
+        sedes_filtro = Sede.objects.filter(id__in=sede_ids_usuario).order_by('nombre')
+    else:
+        sedes_filtro = Sede.objects.all().order_by('nombre')
+
+    conceptos = ConceptoGasto.objects.filter(activo=1).order_by('categoria', 'nombre')
+    medios = MedioPago.objects.all().order_by('nombre')
+
+    context = {
+        'hoy': hoy,
+        'gastos': gastos_page,
+        'sedes': sedes_filtro,
+        'conceptos': conceptos,
+        'medios': medios,
+
+        # filtros actuales
+        'q': q_text,
+        'estado': estado,
+        'sede_id': sede_id,
+        'concepto_id': concepto_id,
+        'medio_id': medio_id,
+        'fecha_desde': fecha_desde,
+        'fecha_hasta': fecha_hasta,
+        'per_page': per_page,
+        'per_page_choices': per_page_choices,
+
+        'hay_filtros': hay_filtros,
+
+        # flags
+        'puede_ver_todas': puede_ver_todas,
+        'sede_ids_usuario': sede_ids_usuario,
+    }
+
+    return render(request, 'listar_gastos.html', context)
+
+@login_required
+@permiso_requerido("gastos_anular")
+@require_POST
+def anular_gasto(request, gasto_id):
+    """
+    Anula un gasto (CE) SIN eliminarlo.
+    - Cambia estado a ANULADO
+    - Registra: fecha_anulacion, motivo_anulacion, usuario_anulacion_id
+    - Respeta seguridad por sedes (si el usuario está restringido)
+    """
+    motivo = (request.POST.get('motivo_anulacion') or '').strip()
+
+    if not motivo:
+        messages.error(request, "Debe indicar el motivo de anulación.")
+        return redirect('listar_gastos')
+
+    gasto = get_object_or_404(
+        Gasto.objects.select_related('sede'),
+        pk=gasto_id
+    )
+
+    # --- Seguridad (misma regla de listar_gastos) ---
+    sede_ids_usuario = user_sede_ids(request.user)
+
+    def es_usuario_global(user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        if (user.username or "").strip() == "Dev_icaro":
+            return True
+        return user.groups.filter(name__in=["CEO", "CFO"]).exists()
+
+    puede_ver_todas = es_usuario_global(request.user)
+
+    # 1) Si NO es global: validar sede asignada
+    if sede_ids_usuario and (not puede_ver_todas) and (gasto.sede_id not in sede_ids_usuario):
+        return render(request, "403.html", status=403)
+
+    # 2) Si NO es global: solo puede anular sus propios gastos
+    if (not puede_ver_todas) and (gasto.usuario_registro_id != request.user.id):
+        return render(request, "403.html", status=403)
+
+    if gasto.estado == "ANULADO":
+        messages.warning(request, f"Este gasto ya estaba anulado: {gasto.numero_comprobante}")
+        return redirect('listar_gastos')
+
+    with transaction.atomic():
+        gasto.estado = "ANULADO"
+        gasto.fecha_anulacion = now()
+        gasto.motivo_anulacion = motivo
+        gasto.usuario_anulacion_id = request.user.id
+        gasto.actualizado_en = now()
+        gasto.save(update_fields=[
+            "estado", "fecha_anulacion", "motivo_anulacion",
+            "usuario_anulacion_id", "actualizado_en"
+        ])
+
+    messages.success(request, f"Gasto anulado: {gasto.numero_comprobante}")
+    return redirect('listar_gastos')

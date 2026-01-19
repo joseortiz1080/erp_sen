@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 # from .models import Sede
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-
+from django.utils import timezone
 
 class Horario(models.Model):
     hora = models.TimeField(unique=True)  # Ejemplo: 08:00:00
@@ -37,6 +37,7 @@ class Acudiente(models.Model):
         ('TI', 'Tarjeta de Identidad'),
         ('CE', 'Cédula de Extranjería'),
         ('PAS', 'Pasaporte'),
+        ('NIT', 'NIT'),
     ]
 
     nombre_completo = models.CharField(max_length=150)
@@ -79,6 +80,7 @@ class Estudiante(models.Model):
         ('TI', 'Tarjeta de Identidad'),
         ('CE', 'Cédula de Extranjería'),
         ('PAS', 'Pasaporte'),
+        ('NIT', 'NIT'),
     ]
 
     nombre_completo = models.CharField(max_length=150)
@@ -125,6 +127,14 @@ class Contrato(models.Model):
 
     # Estado del contrato: SIEMPRE arranca en Activo (forzado también en views.py)
     estado = models.CharField(max_length=20, choices=ESTADOS, default='Activo')
+
+    # Auditoría: fecha automática generada por la BD (CURRENT_TIMESTAMP)
+
+    fecha_creacion = models.DateTimeField(
+        default=timezone.now,
+        editable=False,
+        verbose_name="Fecha de creación"
+    )
 
     class Meta:
         db_table = 'gestion_clientes_contrato'
@@ -578,3 +588,79 @@ class UsuarioRol(models.Model):
 
     def __str__(self):
         return f"{self.usuario_id} -> {self.rol.codigo}"
+    
+
+class ConceptoGasto(models.Model):
+    categoria = models.CharField(max_length=100)
+    nombre = models.CharField(max_length=200)
+    activo = models.BooleanField(default=True)
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'gestion_finanzas_concepto_gasto'
+        verbose_name = 'Concepto de Gasto'
+        verbose_name_plural = 'Conceptos de Gasto'
+
+    def __str__(self):
+        return f"{self.categoria} - {self.nombre}"
+
+class Gasto(models.Model):
+    numero_comprobante = models.CharField(max_length=30, null=True, blank=True)
+    sede = models.ForeignKey(
+        'Sede',
+        on_delete=models.PROTECT,
+        db_column='sede_id'
+    )
+
+    concepto_gasto = models.ForeignKey(
+        ConceptoGasto,
+        on_delete=models.PROTECT,
+        db_column='concepto_gasto_id'
+    )
+
+    valor = models.DecimalField(max_digits=10, decimal_places=2)
+    fecha_gasto = models.DateField()
+
+    medio_pago = models.ForeignKey(
+        'MedioPago',
+        on_delete=models.PROTECT,
+        db_column='medio_pago_id'
+    )
+
+    referencia_factura = models.CharField(max_length=60, null=True, blank=True)
+    referencia = models.CharField(max_length=100)       # sin null/blank
+    observacion = models.TextField()                    # sin null/blank
+
+    estado = models.CharField(max_length=20, default='ACTIVO')
+    fecha_anulacion = models.DateTimeField(null=True, blank=True)
+    motivo_anulacion = models.TextField(null=True, blank=True)
+
+    usuario_anulacion = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='gastos_anulados',
+        db_column='usuario_anulacion_id'
+    )
+
+    usuario_registro = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='gastos_creados',
+        db_column='usuario_registro_id'
+    )
+
+    creado_en = models.DateTimeField()
+    actualizado_en = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'gestion_financiera_gasto'
+        verbose_name = 'Gasto'
+        verbose_name_plural = 'Gastos'
+
+    def __str__(self):
+        return self.numero_comprobante or f"Gasto #{self.id}"

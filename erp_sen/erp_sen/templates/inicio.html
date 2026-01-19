@@ -110,8 +110,9 @@
   {% has_perm "listar_estudiantes" as can_estudiantes %}
   {% has_perm "buscar_estudiante" as can_buscar_estudiante %}
   {% has_perm "registrar_ingreso" as can_reportar_ingreso %}
-  {% has_perm "reportar_gasto" as can_reportar_gasto %}
-  {% if can_nuevo_contrato or can_estudiantes or can_buscar_estudiante or can_reportar_ingreso or can_reportar_gasto %}
+{% has_perm "gastos_crear" as can_reportar_gasto %}
+  {% has_perm "gastos_ver" as can_ver_gastos %}
+  {% if can_nuevo_contrato or can_estudiantes or can_buscar_estudiante or can_reportar_ingreso or can_reportar_gasto or can_ver_gastos %}
   <div class="mb-4">
     <div class="d-flex align-items-center justify-content-between mb-2">
       <h5 class="mb-0">Finanzas</h5>
@@ -185,10 +186,29 @@
           <div class="card-body d-flex flex-column">
             <div class="d-flex align-items-center gap-2 mb-2">
               <i class="bi bi-receipt fs-5"></i>
-              <h6 class="card-title mb-0">Reportar gasto</h6>
+              <h6 class="card-title mb-0">Reportar gastos</h6>
             </div>
-            <p class="card-text text-muted flex-grow-1">Registro de egresos (próximamente).</p>
-            <a href="#" class="btn btn-outline-secondary btn-sm mt-auto disabled" aria-disabled="true">Próximamente</a>
+            <p class="card-text text-muted flex-grow-1">Registra un comprobante de egreso (CE) con trazabilidad.</p>
+            <a href="/gastos/nuevo/" class="btn btn-primary btn-sm mt-auto">Reportar gasto</a>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if can_ver_gastos %}
+      <div class="col-12 col-sm-6 col-lg-3">
+        <div class="card h-100 shadow-sm">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <i class="bi bi-receipt-cutoff fs-5"></i>
+              <h6 class="card-title mb-0">Listar Gastos</h6>
+            </div>
+            <p class="card-text text-muted flex-grow-1">
+              Consulta y gestión de comprobantes de egreso.
+            </p>
+            <a href="{% url 'listar_gastos' %}" class="btn btn-primary btn-sm mt-auto">
+              Ver gastos
+            </a>
           </div>
         </div>
       </div>

@@ -131,8 +131,8 @@
   <!-- KPIs -->
   <div class="row g-3 mb-4">
 
-    <div class="col-12 col-md-6 col-xl-3">
-      <div class="card shadow-sm h-100">
+    <div class="col-12 col-md-4">
+      <div class="card shadow-sm h-100 border-start border-4 border-secondary">
         <div class="card-body">
           <div class="text-muted small">Estudiantes (total)</div>
           <div class="fs-3 fw-semibold">{{ kpis.total_estudiantes|default:0 }}</div>
@@ -141,8 +141,8 @@
       </div>
     </div>
 
-    <div class="col-12 col-md-6 col-xl-3">
-      <div class="card shadow-sm h-100">
+    <div class="col-12 col-md-4">
+      <div class="card shadow-sm h-100 border-start border-4 border-info">
         <div class="card-body">
           <div class="text-muted small">Contratos activos</div>
           <div class="fs-3 fw-semibold">{{ kpis.contratos_activos|default:0 }}</div>
@@ -151,7 +151,7 @@
       </div>
     </div>
 
-    <div class="col-12 col-md-6 col-xl-3">
+    <div class="col-12 col-md-4">
       <div class="card shadow-sm h-100 border-start border-4 border-warning">
         <div class="card-body">
           <div class="text-muted small">Cuotas vencidas ({{ rango_label|default:"Histórico total" }})</div>
@@ -161,12 +161,38 @@
       </div>
     </div>
 
-    <div class="col-12 col-md-6 col-xl-3">
+
+  </div>
+
+  <!-- KPIs financieros ejecutivos (Ingresos / Gastos / Saldo) -->
+  <div class="row g-3 mb-4">
+
+    <div class="col-12 col-md-4">
       <div class="card shadow-sm h-100 border-start border-4 border-success">
         <div class="card-body">
-          <div class="text-muted small">Ingresos del periodo</div>
-          <div class="fs-3 fw-semibold">{{ kpis.ingresos_mes|default:0|moneda_puntos }}</div>
-          <div class="small text-muted">Periodo: <span class="fw-semibold">{{ rango_label|default:"Histórico total" }}</span></div>
+          <div class="text-muted small">Ingresos ({{ rango_label|default:"Histórico total" }})</div>
+          <div class="fs-3 fw-semibold">{{ ingresos_periodo|default:0|moneda_puntos }}</div>
+          <div class="small text-muted">Estado: <span class="fw-semibold">ACTIVO</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <div class="card shadow-sm h-100 border-start border-4 border-danger">
+        <div class="card-body">
+          <div class="text-muted small">Gastos ({{ rango_label|default:"Histórico total" }})</div>
+          <div class="fs-3 fw-semibold">{{ gastos_periodo|default:0|moneda_puntos }}</div>
+          <div class="small text-muted">Estado: <span class="fw-semibold">ACTIVO</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <div class="card shadow-sm h-100 border-start border-4 border-primary">
+        <div class="card-body">
+          <div class="text-muted small">Saldo neto (Ingresos - Gastos)</div>
+          <div class="fs-3 fw-semibold">{{ saldo_periodo|default:0|moneda_puntos }}</div>
+          <div class="small text-muted">Corte: <span class="fw-semibold">{{ rango_label|default:"Histórico total" }}</span></div>
         </div>
       </div>
     </div>
@@ -199,6 +225,173 @@
         <div class="card-body">
           <div class="ratio ratio-1x1">
             <canvas id="chartTopSedes"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="row g-3 mb-4">
+
+    <div class="col-12">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <div class="fw-semibold">Proyección vs Ejecución (24 meses)</div>
+          <div class="text-muted small">
+            Proyección: cuotas (fecha_vencimiento) · Ejecución: pagos aplicados (fecha_aplicacion)
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="ratio ratio-21x9">
+            <canvas id="chartProyEjec"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Resúmenes ejecutivos (Sede / Método de pago) -->
+  <div class="row g-3 mb-4">
+
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <div class="fw-semibold">Resumen por sede</div>
+          <div class="text-muted small">Ingresos, gastos y saldo neto según permisos del usuario</div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Sede</th>
+                  <th class="text-end">Ingresos</th>
+                  <th class="text-end">Gastos</th>
+                  <th class="text-end">Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in resumen_por_sede %}
+                  <tr>
+                    <td>{{ r.sede_nombre }}</td>
+                    <td class="text-end">{{ r.ingresos|default:0|moneda_puntos }}</td>
+                    <td class="text-end">{{ r.gastos|default:0|moneda_puntos }}</td>
+                    <td class="text-end fw-semibold">{{ r.saldo|default:0|moneda_puntos }}</td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="4" class="text-center text-muted py-4">Sin datos para el rango seleccionado.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <div class="fw-semibold">Saldos por método de pago</div>
+          <div class="text-muted small">Efectivo / Bancos / Billeteras — ingresos vs egresos</div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Método</th>
+                  <th class="text-end">Ingresos</th>
+                  <th class="text-end">Gastos</th>
+                  <th class="text-end">Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in resumen_por_medio %}
+                  <tr>
+                    <td>{{ r.medio_nombre }}</td>
+                    <td class="text-end">{{ r.ingresos|default:0|moneda_puntos }}</td>
+                    <td class="text-end">{{ r.gastos|default:0|moneda_puntos }}</td>
+                    <td class="text-end fw-semibold">{{ r.saldo|default:0|moneda_puntos }}</td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="4" class="text-center text-muted py-4">Sin datos para el rango seleccionado.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Resumen combinado (Sede -> Método de pago -> Totales) -->
+  <div class="row g-3 mb-4">
+
+    <div class="col-12">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <div class="fw-semibold">Resumen por sede y método de pago</div>
+          <div class="text-muted small">Jerarquía: Sede → Método → Total sede → Total instituto</div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th style="min-width: 200px;">Sede</th>
+                  <th style="min-width: 220px;">Método</th>
+                  <th class="text-end" style="min-width: 140px;">Ingresos</th>
+                  <th class="text-end" style="min-width: 140px;">Gastos</th>
+                  <th class="text-end" style="min-width: 140px;">Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+
+                {% for sede in resumen_sede_medio %}
+                  <!-- TOTAL SEDE -->
+                  <tr class="table-primary">
+                    <td class="fw-semibold">{{ sede.sede_nombre }}</td>
+                    <td class="fw-semibold">TOTAL SEDE</td>
+                    <td class="text-end fw-semibold">{{ sede.total_ingresos|default:0|moneda_puntos }}</td>
+                    <td class="text-end fw-semibold">{{ sede.total_gastos|default:0|moneda_puntos }}</td>
+                    <td class="text-end fw-semibold">{{ sede.total_saldo|default:0|moneda_puntos }}</td>
+                  </tr>
+
+                  <!-- DETALLE POR MÉTODO -->
+                  {% for m in sede.medios %}
+                    <tr>
+                      <td class="text-muted">&nbsp;</td>
+                      <td>{{ m.medio_nombre }}</td>
+                      <td class="text-end">{{ m.ingresos|default:0|moneda_puntos }}</td>
+                      <td class="text-end">{{ m.gastos|default:0|moneda_puntos }}</td>
+                      <td class="text-end fw-semibold">{{ m.saldo|default:0|moneda_puntos }}</td>
+                    </tr>
+                  {% endfor %}
+
+                {% empty %}
+                  <tr>
+                    <td colspan="5" class="text-center text-muted py-4">Sin datos para el rango seleccionado.</td>
+                  </tr>
+                {% endfor %}
+
+                <!-- TOTAL INSTITUTO -->
+                <tr class="table-dark">
+                  <td class="fw-semibold">TOTAL INSTITUTO</td>
+                  <td class="fw-semibold">—</td>
+                  <td class="text-end fw-semibold">{{ ingresos_periodo|default:0|moneda_puntos }}</td>
+                  <td class="text-end fw-semibold">{{ gastos_periodo|default:0|moneda_puntos }}</td>
+                  <td class="text-end fw-semibold">{{ saldo_periodo|default:0|moneda_puntos }}</td>
+                </tr>
+
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -274,6 +467,7 @@
     // ==========================
     const ingresos6m = JSON.parse('{{ chart_ingresos_6m|default:"{}"|escapejs }}');
     const topSedes = JSON.parse('{{ chart_top_sedes|default:"{}"|escapejs }}');
+    const proyEjec = JSON.parse('{{ chart_proyeccion_vs_ejecucion|default:"{}"|escapejs }}');
 
     // Ingresos
     const labels6m = ingresos6m.labels || [];
@@ -301,18 +495,19 @@
     }
 
     // Top sedes
-    const labelsS = topSedes.labels || [];
-    const valuesS = topSedes.values || [];
+    const labelsS  = topSedes.labels || [];
+    const ingresosS = topSedes.ingresos || [];
+    const gastosS   = topSedes.gastos || [];
     const ctx2 = document.getElementById('chartTopSedes');
     if (ctx2) {
       new Chart(ctx2, {
         type: 'bar',
         data: {
           labels: labelsS,
-          datasets: [{
-            label: 'Ingresos',
-            data: valuesS
-          }]
+          datasets: [
+            { label: 'Ingresos', data: ingresosS },
+            { label: 'Gastos', data: gastosS }
+          ]
         },
         options: {
           indexAxis: 'y',
@@ -323,6 +518,33 @@
         }
       });
     }
+  
+      // Proyección vs Ejecución (barras verticales)
+    const labelsPE = proyEjec.labels || [];
+    const proyPE   = proyEjec.proyeccion || [];
+    const ejecPE   = proyEjec.ejecucion || [];
+
+    const ctx3 = document.getElementById('chartProyEjec');
+    if (ctx3) {
+      new Chart(ctx3, {
+        type: 'bar',
+        data: {
+          labels: labelsPE,
+          datasets: [
+            { label: 'Proyección (Cuotas)', data: proyPE },
+            { label: 'Ejecución (Aplicado)', data: ejecPE }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: true } },
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    }
+
+
   })();
 </script>
 {% endblock %}
